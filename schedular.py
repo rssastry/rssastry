@@ -1,0 +1,238 @@
+"""
+scheduler.py — Daily Run Scheduler
+Orchestrates the full pipeline automatically
+"""
+
+import schedule
+import time
+import json
+import os
+from datetime import datetime
+from screener import StockScreener
+from ai_analyst import AIAnalyst
+from portfolio import show_portfolio, run_hold_sell_analysis
+from alerts import send_morning_summary, send_portfolio_alert, send_telegram
+import warnings
+warnings.filterwarnings("ignore")
+
+
+def is_market_day() -> bool:
+    """Skip weekends — NSE is closed Sat & Sun."""
+    return datetime.today().weekday() < 5
+
+
+def log(msg: str):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}")
+
+
+# ─────────────────────────────────────────────
+# Job 1 — Morning Scan (9:00 AM)
+# ─────────────────────────────────────────────
+def job_morning_scan():
+    if not is_market_day():
+        log("Weekend — skipping morning scan.")
+        return
+
+    log("Starting morning scan...")
+    send_telegram(
+        f"<b>Market scan starting...</b>\n"
+        f"{datetime.now().strftime('%d %b %Y, %H:%M IST')}"
+    )
+
+    try:
+        # Step 1: Screen
+        screener = StockScreener()
+        results  = screener.screen(
+            styles=["intraday", "swing", "positional"],
+            top_n=15
+        )
+        log("Screener done. Running AI analysis...")
+
+        # Step 2: AI analyze
+        analyst  = AIAnalyst()
+        analysis = analyst.analyze_top_picks(results, delay_seconds=3)
+
+        # Step 3: Send morning summary
+        send_morning_summary(analysis)
+        log("Morning scan complete.")
+
+    except Exception as e:
+        log(f"Morning scan failed: {e}")
+        send_telegram(f"<b>Morning scan error:</b> {e}")
+
+
+# ─────────────────────────────────────────────
+# Job 2 — Midday Portfolio Review (12:30 PM)
+# ─────────────────────────────────────────────
+def job_midday_review():
+    if not is_market_day():
+        return
+
+    log("Midday portfolio review...")
+    try:
+        results = run_hold_sell_analysis()
+        for r in results:
+            # Alert only urgent actions
+            if r.get("action") in ("FULL_SELL", "PARTIAL_SELL") or \
+               r.get("urgency") == "Immediate":
+                send_portfolio_alert(r)
+
+        log(f"Midday review done. {len(results)} holdings checked.")
+
+    except Exception as e:
+        log(f"Midday review failed: {e}")
+
+
+# ─────────────────────────────────────────────
+# Job 3 — Pre-Close SL Check (3:00 PM)
+# ─────────────────────────────────────────────
+def job_preclose_check():
+    if not is_market_day():
+        return
+
+    log("Pre-close stop loss check...")
+    try:
+        if not os.path.exists("portfolio.json"):
+            log("No portfolio file found.")
+            return
+
+        with open("portfolio.json") as f:
+            portfolio = json.load(f)
+
+        from indicators import IndicatorEngine
+
+        for h in portfolio.get("holdings", []):
+            symbol = h["symbol"]
+            engine = IndicatorEngine(symbol + ".NS")
+            if not engine.fetch():
+                continue
+
+            ind = engine.compute_all()
+            cmp = ind.get("current_price", 0)
+            sl  = h.get("stop_loss", 0)
+            tgt = h.get("target", 0)
+
+            if cmp > 0 and cmp <= sl:
+                send_telegram(
+                    f"<b>STOP LOSS HIT - {symbol}</b>\n"
+                    f"CMP Rs.{cmp} has hit SL Rs.{sl}\n"
+                    f"Consider exiting immediately!\n"
+                    f"Time: {datetime.now().strftime('%H:%M IST')}"
+                )
+                log(f"SL alert sent for {symbol}")
+
+            elif cmp > 0 and cmp >= tgt:
+                send_telegram(
+                    f"<b>TARGET HIT - {symbol}</b>\n"
+                    f"CMP Rs.{cmp} has reached Target Rs.{tgt}\n"
+                    f"Consider booking profits!\n"
+                    f"Time: {datetime.now().strftime('%H:%M IST')}"
+                )
+                log(f"Target alert sent for {symbol}")
+
+        log("Pre-close check done.")
+
+    except Exception as e:
+        log(f"Pre-close check failed: {e}")
+
+
+# ─────────────────────────────────────────────
+# Job 4 — EOD Summary (3:45 PM)
+# ─────────────────────────────────────────────
+def job_eod_summary():
+    if not is_market_day():
+        return
+
+    log("Sending EOD summary...")
+    try:
+        # Build portfolio P&L summary
+        pnl_text = ""
+        if os.path.exists("portfolio.json"):
+            with open("portfolio.json") as f:
+                portfolio = json.load(f)
+            holdings = portfolio.get("holdings", [])
+            if holdings:
+                from indicators import IndicatorEngine
+                total_inv = 0
+                total_cur = 0
+                for h in holdings:
+                    engine = IndicatorEngine(h["symbol"] + ".NS")
+                    if engine.fetch():
+                        ind = engine.compute_all()
+                        cmp = ind.get("current_price", h["buy_price"])
+                    else:
+                        cmp = h["buy_price"]
+                    total_inv += h["buy_price"] * h["quantity"]
+                    total_cur += cmp * h["quantity"]
+                total_pnl     = total_cur - total_inv
+                total_pnl_pct = (total_pnl / total_inv * 100) if total_inv else 0
+                direction     = "UP" if total_pnl >= 0 else "DOWN"
+                pnl_text = (
+                    f"\nPortfolio P&L: Rs.{total_pnl:+,.0f} "
+                    f"({total_pnl_pct:+.2f}%) {direction}"
+                )
+
+        send_telegram(
+            f"<b>Market Closed - EOD Summary</b>\n"
+            f"Date: {datetime.now().strftime('%d %b %Y')}"
+            f"{pnl_text}\n"
+            f"Next scan: Tomorrow 9:00 AM IST\n"
+            f"Open dashboard for full details."
+        )
+        log("EOD summary sent.")
+
+    except Exception as e:
+        log(f"EOD summary failed: {e}")
+
+
+# ─────────────────────────────────────────────
+# Manual trigger for testing
+# ─────────────────────────────────────────────
+def run_now(job: str = "morning"):
+    """Manually trigger any job without waiting for schedule."""
+    jobs = {
+        "morning":  job_morning_scan,
+        "midday":   job_midday_review,
+        "preclose": job_preclose_check,
+        "eod":      job_eod_summary,
+    }
+    fn = jobs.get(job)
+    if fn:
+        log(f"Manually running: {job}")
+        fn()
+    else:
+        log(f"Unknown job '{job}'. Options: {list(jobs.keys())}")
+
+
+# ─────────────────────────────────────────────
+# Scheduler Entry Point
+# ─────────────────────────────────────────────
+def run_scheduler():
+    log("Scheduler started.")
+    log("Jobs scheduled:")
+    log("  09:00 AM — Morning scan + AI analysis + Telegram alert")
+    log("  12:30 PM — Portfolio hold/sell review")
+    log("  03:00 PM — Stop loss and target checks")
+    log("  03:45 PM — EOD portfolio summary")
+    log("Press Ctrl+C to stop.\n")
+
+    schedule.every().day.at("09:00").do(job_morning_scan)
+    schedule.every().day.at("12:30").do(job_midday_review)
+    schedule.every().day.at("15:00").do(job_preclose_check)
+    schedule.every().day.at("15:45").do(job_eod_summary)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
+
+
+# ─────────────────────────────────────────────
+# Entry
+# ─────────────────────────────────────────────
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1:
+        run_now(sys.argv[1])
+    else:
+        run_scheduler()

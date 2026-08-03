@@ -1,0 +1,42 @@
+# ── Data Fetching ──────────────────────────────
+yfinance==0.2.40              # Yahoo Finance stock data
+alpha_vantage==2.3.1          # Technical indicators
+finnhub-python==2.4.20        # News & sentiment
+requests==2.31.0              # HTTP calls
+feedparser==6.0.11            # RSS news feeds
+
+# ── Data Processing ───────────────────────────
+pandas==2.2.2                 # Data manipulation
+numpy==1.26.4                 # Numerical computing
+pandas-ta==0.3.14b            # 130+ technical indicators
+TA-Lib==0.4.28                # Advanced TA library (see note below)
+
+# ── AI / LLM Integration ──────────────────────
+google-generativeai==0.7.2    # Gemini API (free tier)
+groq==0.9.0                   # Groq LLaMA (free tier)
+openai==1.35.0                # OpenAI compatible clients
+anthropic==0.30.0             # Claude API
+
+# ── Alert System ──────────────────────────────
+python-telegram-bot==21.3     # Telegram alerts
+smtplib2==0.2.1               # Email alerts (Gmail)
+
+# ── Dashboard ─────────────────────────────────
+streamlit==1.36.0             # Web dashboard UI
+plotly==5.22.0                # Interactive stock charts
+streamlit-autorefresh==1.0.1  # Auto-refresh dashboard
+
+# ── Database ──────────────────────────────────
+SQLAlchemy==2.0.31            # ORM for SQLite
+sqlite3                        # Built-in with Python
+
+# ── Scheduling ────────────────────────────────
+schedule==1.2.2               # Job scheduler (local cron)
+APScheduler==3.10.4           # Advanced scheduler
+
+# ── Utilities ─────────────────────────────────
+python-dotenv==1.0.1          # Manage API keys securely
+loguru==0.7.2                 # Better logging
+tqdm==4.66.4                  # Progress bars
+colorama==0.4.6               # Colored terminal output
+tabulate==0.9.0               # Pretty print tables in terminal
