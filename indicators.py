@@ -11,21 +11,152 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 import yfinance as yf
 import warnings
+from config import (BREAKDOWN_LOOKBACK_BARS, BREAKDOWN_RESOLUTION_LOOKBACK,
+                    CRASH_DAY_PCT, CRASH_DAY_VOL_MULT,
+                    FRESH_TRIGGER_BARS, BOUNCE_HIST_MIN_SAMPLES, MAX_VOLUME_RATIO)
 warnings.filterwarnings("ignore")
+
+
+def find_unresolved_breakdown(close, high, vol, index=None,
+                              lookback=BREAKDOWN_LOOKBACK_BARS):
+    """Scan completed bars for a high-volume crash day (pct <= CRASH_DAY_PCT and
+    vol >= CRASH_DAY_VOL_MULT). If one exists within `lookback` bars AND the
+    latest close is still below the pre-crash swing high (the reclaim level),
+    return (True, info_dict).
+
+    Unlike `recent_breakdown_day` (which expires after a couple of bars), an
+    unresolved breakdown does NOT expire — the crash stays a cap on the stock
+    until the price actually reclaims the broken level. This is exactly the
+    HINDCOPPER trap: crashed 2026-08-24, the 2-bar guard expired, and the stock
+    could be re-offered as a BUY while still ₹60 below the broken 586.75 high.
+    """
+    try:
+        n = len(close)
+        if n < (max(3, int(lookback)) + 2):
+            return False, {}
+        pct = close.pct_change() * 100.0
+        base = vol.rolling(20, min_periods=10).median()
+        vr = (vol / base.replace(0, np.nan)).fillna(0).clip(upper=MAX_VOLUME_RATIO)
+        lookback = min(int(lookback), max(n - 2, 0))
+        latest = float(close.iloc[-1])
+        for k in range(1, lookback + 1):
+            i = n - 1 - k
+            if i <= 1:
+                continue
+            if (pct.iloc[i] <= CRASH_DAY_PCT and vr.iloc[i] >= CRASH_DAY_VOL_MULT):
+                pre_win = high.iloc[max(0, i - 5):i]
+                reclaim = float(pre_win.max()) if len(pre_win) else float(high.iloc[i])
+                if latest < reclaim:
+                    d = ""
+                    if index is not None and i < len(index):
+                        ts = index[i]
+                        d = ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)
+                    return True, {
+                        "date": d,
+                        "change_pct": round(float(pct.iloc[i]), 2),
+                        "volume_ratio": round(float(vr.iloc[i]), 2),
+                        "reclaim_level": round(reclaim, 2),
+                    }
+                # A crash day exists but the price has reclaimed it -> resolved.
+                break
+    except Exception:
+        pass
+    return False, {}
+
+
+def bounce_after_breakdown_stats(close, high, vol,
+                                 crash_pct=CRASH_DAY_PCT,
+                                 crash_vol_mult=CRASH_DAY_VOL_MULT,
+                                 min_samples=BOUNCE_HIST_MIN_SAMPLES):
+    """Empirical next-session continuation odds for the dead-cat-bounce setup.
+
+    Mirrors `screener._bounce_after_breakdown_stats` so the analysis engine and
+    the screener stay consistent: a breakdown day followed by an up session, then
+    the % of those bounces that close higher again next session.
+    """
+    try:
+        if close is None or len(close) < 40:
+            return None, 0
+        pct = close.pct_change() * 100.0
+        base = vol.rolling(20, min_periods=10).median()
+        vr = (vol / base.replace(0, np.nan)).clip(upper=MAX_VOLUME_RATIO)
+        results, setups = [], 0
+        for i in range(2, len(close) - 2):
+            if not (pct.iloc[i] <= crash_pct and vr.iloc[i] >= crash_vol_mult):
+                continue
+            if not (close.iloc[i + 1] > close.iloc[i]):
+                continue
+            setups += 1
+            results.append(1.0 if close.iloc[i + 2] > close.iloc[i + 1] else 0.0)
+        n = len(results)
+        if n < min_samples:
+            return None, n
+        return round(100.0 * sum(results) / n, 1), n
+    except Exception:
+        return None, 0
 
 
 class IndicatorEngine:
 
-    def __init__(self, symbol: str, period: str = "60d"):
+    def __init__(self, symbol: str, period: str = "2y"):
         self.symbol = symbol
         self.period = period
         self.df = None
+        self.data_anomaly = ""
 
     def fetch(self) -> bool:
         try:
-            ticker = yf.Ticker(self.symbol)
-            self.df = ticker.history(period=self.period, interval="1d")
-            self.df.dropna(inplace=True)
+            # use cached downloader if available
+            try:
+                from data_cache import fetch_history
+                df = fetch_history(self.symbol, period=self.period, interval='1d')
+            except Exception:
+                ticker = yf.Ticker(self.symbol)
+                df = ticker.history(period=self.period, interval="1d")
+
+            if df is None or df.empty:
+                return False
+
+            # Data freshness check: warn if the last bar is stale (> 5 calendar days old)
+            try:
+                last_date = df.index[-1]
+                if hasattr(last_date, "date"):
+                    last_date = last_date.date()
+                from datetime import date
+                days_stale = (date.today() - last_date).days
+                if days_stale > 5:
+                    print(f"  ⚠ {self.symbol}: data is {days_stale} days stale "
+                          f"(last bar {last_date})")
+            except Exception:
+                pass
+
+            # apply adjusted close if present to avoid corporate-action distortions
+            if 'Adj Close' in df.columns:
+                try:
+                    adj = df['Adj Close']
+                    raw_close = df['Close']
+                    # avoid division by zero
+                    ratio = adj / raw_close.replace(0, np.nan)
+                    ratio.fillna(method='ffill', inplace=True)
+                    # scale OHLC by ratio to get adjusted OHLC
+                    df['Open'] = (df['Open'] * ratio).astype(float)
+                    df['High'] = (df['High'] * ratio).astype(float)
+                    df['Low'] = (df['Low'] * ratio).astype(float)
+                    df['Close'] = adj.astype(float)
+                except Exception:
+                    pass
+
+            df.dropna(inplace=True)
+            self.df = df
+            # corporate-action anomaly flag (survives parquet round-trips)
+            try:
+                if "data_anomaly_str" in df.columns:
+                    a = str(df["data_anomaly_str"].dropna().iloc[-1])
+                    self.data_anomaly = a if a.lower() not in ("", "nan") else ""
+                else:
+                    self.data_anomaly = getattr(df, "attrs", {}).get("data_anomaly", "")
+            except Exception:
+                self.data_anomaly = ""
             return len(self.df) >= 20
         except Exception:
             return False
@@ -80,6 +211,29 @@ class IndicatorEngine:
         atr     = AverageTrueRange(high, low, close, window=14).average_true_range()
         atr_pct = (atr.iloc[-1] / current) * 100
 
+        # Multi-timeframe (weekly) confirmation
+        weekly_trend = 'unknown'
+        multi_tf_confirm = False
+        try:
+            weekly = df[['Open','High','Low','Close','Volume']].resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+            if len(weekly) >= 20:
+                w_close = weekly['Close']
+                w_ema21 = EMAIndicator(w_close, window=21).ema_indicator()
+                w_ema50 = EMAIndicator(w_close, window=50).ema_indicator()
+                if w_ema21.iloc[-1] > w_ema50.iloc[-1]:
+                    weekly_trend = 'bullish'
+                elif w_ema21.iloc[-1] < w_ema50.iloc[-1]:
+                    weekly_trend = 'bearish'
+                else:
+                    weekly_trend = 'neutral'
+                # confirm if daily and weekly agree on direction
+                if (ema21.iloc[-1] > ema50.iloc[-1] and w_ema21.iloc[-1] > w_ema50.iloc[-1]) or (
+                    ema21.iloc[-1] < ema50.iloc[-1] and w_ema21.iloc[-1] < w_ema50.iloc[-1]):
+                    multi_tf_confirm = True
+        except Exception:
+            weekly_trend = 'unknown'
+            multi_tf_confirm = False
+
         # ADX
         adx_obj        = ADXIndicator(high, low, close, window=14)
         adx            = adx_obj.adx().iloc[-1]
@@ -117,6 +271,7 @@ class IndicatorEngine:
 
                 if pd.notna(rsi_day) and 50 <= float(rsi_day) <= 65 and day_volume_ratio >= 1.5 and above_both:
                     bullish_crossover_rule = {
+                        "bar_index": idx,
                         "date": df.index[idx].strftime("%Y-%m-%d") if hasattr(df.index[idx], "strftime") else str(df.index[idx]),
                         "volume_ratio": round(float(day_volume_ratio), 2),
                         "rsi": round(float(rsi_day), 2),
@@ -135,6 +290,7 @@ class IndicatorEngine:
 
                 if pd.notna(rsi_day) and 35 <= float(rsi_day) <= 50 and day_volume_ratio >= 1.5 and below_both:
                     bearish_crossover_rule = {
+                        "bar_index": idx,
                         "date": df.index[idx].strftime("%Y-%m-%d") if hasattr(df.index[idx], "strftime") else str(df.index[idx]),
                         "volume_ratio": round(float(day_volume_ratio), 2),
                         "rsi": round(float(rsi_day), 2),
@@ -143,8 +299,102 @@ class IndicatorEngine:
                         "ema50": round(float(curr_ema50), 2),
                     }
 
-        buy_rule_passed = bullish_crossover_rule is not None
-        sell_rule_passed = bearish_crossover_rule is not None
+        # require crossover to be recent (configurable) using TRADING BARS,
+        # not calendar days (Friday -> Monday is one bar, not three days)
+        from config import CROSSOVER_RECENCY_BARS
+        if bullish_crossover_rule is not None:
+            try:
+                buy_rule_passed = (len(df) - 1 - bullish_crossover_rule["bar_index"]) <= CROSSOVER_RECENCY_BARS
+            except Exception:
+                buy_rule_passed = True
+        else:
+            buy_rule_passed = False
+
+        # ── Breakdown / dead-cat-bounce awareness ─────────────────────
+        # Identical logic to screener.compute_indicators so the Analyze page
+        # and the AI analyst see the same bull-trap context as the screener.
+        recent_breakdown_day = False
+        breakdown_info = {}
+        gap_pct_now = ((open_price - prev) / prev) * 100 if prev else 0.0
+        pct_ser = close.pct_change() * 100.0
+        vol_base = vol.rolling(20, min_periods=10).median()
+        vol_ratio_ser = (vol / vol_base.replace(0, np.nan)).fillna(0).clip(upper=MAX_VOLUME_RATIO)
+        lookback = min(int(BREAKDOWN_LOOKBACK_BARS), max(len(df) - 2, 0))
+        for k in range(1, lookback + 1):
+            i = len(df) - 1 - k
+            if i <= 1:
+                continue
+            if (pct_ser.iloc[i] <= CRASH_DAY_PCT and vol_ratio_ser.iloc[i] >= CRASH_DAY_VOL_MULT):
+                recent_breakdown_day = True
+                pre_win = high.iloc[max(0, i - 5):i]
+                breakdown_info = {
+                    "date": df.index[i].strftime("%Y-%m-%d") if hasattr(df.index[i], "strftime") else str(df.index[i]),
+                    "change_pct": round(float(pct_ser.iloc[i]), 2),
+                    "volume_ratio": round(float(vol_ratio_ser.iloc[i]), 2),
+                    "reclaim_level": round(float(pre_win.max()) if len(pre_win) else float(high.iloc[i]), 2),
+                }
+                break
+        reclaim_needed = breakdown_info.get("reclaim_level") if recent_breakdown_day else None
+        reclaims_breakdown_level = bool(reclaim_needed and current >= reclaim_needed)
+        bounce_after_breakdown = bool(recent_breakdown_day and change_pct > 0)
+
+        # ── Recent high-volume reversal guard (SUNPHARMA 2026-09-01) ──
+        # Mirrors screener.compute_indicators: a distribution candle within
+        # REVERSAL_LOOKBACK_BARS (that has not been reclaimed) warns that the
+        # latest "positive day" may be a low-volume bounce into overhead supply.
+        from config import REVERSAL_LOOKBACK_BARS, REVERSAL_DAY_PCT, REVERSAL_DAY_VOL_MULT
+        recent_reversal_day = False
+        reversal_info = {}
+        rev_lookback = min(int(REVERSAL_LOOKBACK_BARS), max(len(df) - 3, 0))
+        for k_r in range(1, rev_lookback + 1):
+            i_r = len(df) - 1 - k_r
+            if i_r <= 1:
+                continue
+            if (pct_ser.iloc[i_r] <= REVERSAL_DAY_PCT
+                    and vol_ratio_ser.iloc[i_r] >= REVERSAL_DAY_VOL_MULT):
+                pre_r_win = high.iloc[max(0, i_r - 5):i_r]
+                reversal_info = {
+                    "date": df.index[i_r].strftime("%Y-%m-%d") if hasattr(df.index[i_r], "strftime") else str(df.index[i_r]),
+                    "change_pct": round(float(pct_ser.iloc[i_r]), 2),
+                    "volume_ratio": round(float(vol_ratio_ser.iloc[i_r]), 2),
+                    "reclaim_level": round(float(pre_r_win.max()) if len(pre_r_win) else float(high.iloc[i_r]), 2),
+                }
+                recent_reversal_day = True
+                break
+        reclaims_reversal_level = bool(
+            reversal_info.get("reclaim_level")
+            and current >= reversal_info["reclaim_level"]
+        ) if recent_reversal_day else None
+        fresh_macd = False
+        hist_vals = macd_hist.values
+        for k2 in range(1, min(FRESH_TRIGGER_BARS + 1, len(hist_vals) - 1)):
+            j = len(hist_vals) - 1 - k2
+            if j <= 0:
+                break
+            if hist_vals[j] > 0 and hist_vals[j - 1] <= 0:
+                fresh_macd = True
+                break
+        fresh_bullish_trigger = bool(fresh_macd or buy_rule_passed)
+        bounce_win_pct, bounce_samples = bounce_after_breakdown_stats(close, high, vol)
+        day_range = max(float(high.iloc[-1]) - float(low.iloc[-1]), 1e-9)
+        close_location = float((current - low.iloc[-1]) / day_range)
+
+        # ── Persistent unresolved-breakdown guard ─────────────────────
+        # Unlike `recent_breakdown_day` (2-bar expiry), this stays TRUE until
+        # the price reclaims the broken swing high, so a crash stock cannot be
+        # re-offered as BUY while below the broken level (HINDCOPPER 8/24 crash,
+        # never reclaimed 586.75).
+        unresolved_breakdown, unresolved_info = find_unresolved_breakdown(
+            close, high, vol, index=df.index,
+            lookback=BREAKDOWN_RESOLUTION_LOOKBACK)
+
+        if bearish_crossover_rule is not None:
+            try:
+                sell_rule_passed = (len(df) - 1 - bearish_crossover_rule["bar_index"]) <= CROSSOVER_RECENCY_BARS
+            except Exception:
+                sell_rule_passed = True
+        else:
+            sell_rule_passed = False
         buy_rule_reason = (
             f"EMA21/50 bullish crossover confirmed on {bullish_crossover_rule['date']} with "
             f"{bullish_crossover_rule['volume_ratio']}x volume and RSI {bullish_crossover_rule['rsi']}"
@@ -165,9 +415,10 @@ class IndicatorEngine:
         r2    = pivot + (high.iloc[-1] - low.iloc[-1])
         s2    = pivot - (high.iloc[-1] - low.iloc[-1])
 
-        # 52W
-        high_52w      = high.iloc[-min(252, len(high)):].max()
-        low_52w       = low.iloc[-min(252, len(low)):].min()
+        # 52W — only meaningful with >= 252 trading sessions
+        n_52w = min(252, len(high))
+        high_52w      = high.iloc[-n_52w:].max()
+        low_52w       = low.iloc[-n_52w:].min()
         pct_from_high = ((current - high_52w) / high_52w) * 100
 
         # Candlestick patterns
@@ -239,6 +490,9 @@ class IndicatorEngine:
             # ATR
             "atr":               round(atr.iloc[-1], 2),
             "atr_pct":           round(atr_pct, 2),
+            # Multi-timeframe
+            "weekly_trend":      weekly_trend,
+            "multi_tf_confirm":  multi_tf_confirm,
             # ADX
             "adx":               round(adx, 2),
             "adx_pos":           round(adx_pos, 2),
@@ -274,6 +528,32 @@ class IndicatorEngine:
             # Overall
             "overall_signal":    overall,
             "bull_signal_count": bull_signals,
+            # ── Breakdown / dead-cat-bounce awareness ──────────────────
+            "recent_breakdown_day":    recent_breakdown_day,
+            "breakdown_date":          breakdown_info.get("date"),
+            "breakdown_change_pct":    breakdown_info.get("change_pct"),
+            "breakdown_volume_ratio":  breakdown_info.get("volume_ratio"),
+            "breakdown_reclaim_level": reclaim_needed,
+            "reclaims_breakdown_level": reclaims_breakdown_level,
+            "bounce_after_breakdown":  bounce_after_breakdown,
+            "fresh_bullish_trigger":   fresh_bullish_trigger,
+            "bounce_win_pct":          bounce_win_pct,
+            "bounce_samples":          bounce_samples,
+            # ── Persistent unresolved-breakdown (until reclaim) ────────
+            "unresolved_breakdown":        unresolved_breakdown,
+            "unresolved_breakdown_date":   unresolved_info.get("date"),
+            "unresolved_reclaim_level":    unresolved_info.get("reclaim_level"),
+            # ── Recent high-volume reversal (SUNPHARMA 2026-09-01) ───────
+            "recent_reversal_day":         recent_reversal_day,
+            "reversal_date":               reversal_info.get("date"),
+            "reversal_change_pct":         reversal_info.get("change_pct"),
+            "reversal_volume_ratio":       reversal_info.get("volume_ratio"),
+            "reversal_reclaim_level":      reversal_info.get("reclaim_level"),
+            "reclaims_reversal_level":     reclaims_reversal_level,
+            # ── Corporate-action data anomaly ──────────────────────────
+            "data_anomaly":                self.data_anomaly,
+            "gap_pct":                 round(gap_pct_now, 2),
+            "close_location":          round(close_location, 3),
             # Raw OHLCV for AI prompt
             "ohlcv_30d": df[["Open","High","Low","Close","Volume"]].tail(30).to_dict()
         }

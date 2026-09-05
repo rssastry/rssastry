@@ -17,8 +17,16 @@ warnings.filterwarnings("ignore")
 
 
 def is_market_day() -> bool:
-    """Skip weekends — NSE is closed Sat & Sun."""
-    return datetime.today().weekday() < 5
+    """Skip weekends AND NSE holidays."""
+    from config import NSE_HOLIDAYS_2026
+    today = datetime.today()
+    if today.weekday() >= 5:
+        return False
+    # Check NSE holiday list
+    date_str = today.strftime("%Y-%m-%d")
+    if date_str in NSE_HOLIDAYS_2026:
+        return False
+    return True
 
 
 def log(msg: str):
@@ -26,15 +34,29 @@ def log(msg: str):
     print(f"[{ts}] {msg}")
 
 
+def get_live_price(symbol: str) -> float:
+    """Get the current intraday price using 1-minute bars."""
+    try:
+        import yfinance as yf
+        sym = symbol if ".NS" in symbol else symbol + ".NS"
+        df = yf.Ticker(sym).history(period="1d", interval="1m")
+        if df is not None and not df.empty:
+            return round(float(df["Close"].iloc[-1]), 2)
+        return 0.0
+    except Exception:
+        return 0.0
+
+
 # ─────────────────────────────────────────────
-# Job 1 — Morning Scan (9:00 AM)
+# Job 1 — Post-Close Scan (15:45 PM)
+# Runs AFTER market close so daily volume is confirmed.
 # ─────────────────────────────────────────────
 def job_morning_scan():
     if not is_market_day():
-        log("Weekend — skipping morning scan.")
+        log("Weekend or NSE holiday — skipping scan.")
         return
 
-    log("Starting morning scan...")
+    log("Starting post-close scan...")
     send_telegram(
         f"<b>Market scan starting...</b>\n"
         f"{datetime.now().strftime('%d %b %Y, %H:%M IST')}"
@@ -55,11 +77,11 @@ def job_morning_scan():
 
         # Step 3: Send morning summary
         send_morning_summary(analysis)
-        log("Morning scan complete.")
+        log("Post-close scan complete.")
 
     except Exception as e:
-        log(f"Morning scan failed: {e}")
-        send_telegram(f"<b>Morning scan error:</b> {e}")
+        log(f"Post-close scan failed: {e}")
+        send_telegram(f"<b>Post-close scan error:</b> {e}")
 
 
 # ─────────────────────────────────────────────
@@ -104,12 +126,17 @@ def job_preclose_check():
 
         for h in portfolio.get("holdings", []):
             symbol = h["symbol"]
-            engine = IndicatorEngine(symbol + ".NS")
-            if not engine.fetch():
-                continue
 
-            ind = engine.compute_all()
-            cmp = ind.get("current_price", 0)
+            # Use live intraday price for stop-loss/target alerts
+            cmp = get_live_price(symbol)
+            if cmp <= 0:
+                # Fallback to daily-bar close if live quote unavailable
+                engine = IndicatorEngine(symbol + ".NS")
+                if not engine.fetch():
+                    continue
+                ind = engine.compute_all()
+                cmp = ind.get("current_price", 0)
+
             sl  = h.get("stop_loss", 0)
             tgt = h.get("target", 0)
 
@@ -138,7 +165,7 @@ def job_preclose_check():
 
 
 # ─────────────────────────────────────────────
-# Job 4 — EOD Summary (3:45 PM)
+# Job 4 — EOD Summary (4:00 PM)
 # ─────────────────────────────────────────────
 def job_eod_summary():
     if not is_market_day():
@@ -177,7 +204,7 @@ def job_eod_summary():
             f"<b>Market Closed - EOD Summary</b>\n"
             f"Date: {datetime.now().strftime('%d %b %Y')}"
             f"{pnl_text}\n"
-            f"Next scan: Tomorrow 9:00 AM IST\n"
+            f"Next scan: Tomorrow 15:45 PM IST\n"
             f"Open dashboard for full details."
         )
         log("EOD summary sent.")
@@ -209,18 +236,22 @@ def run_now(job: str = "morning"):
 # Scheduler Entry Point
 # ─────────────────────────────────────────────
 def run_scheduler():
+    from config import (
+        MORNING_SCAN_TIME, MIDDAY_REVIEW_TIME,
+        PRECLOSE_CHECK_TIME, EOD_SUMMARY_TIME,
+    )
     log("Scheduler started.")
     log("Jobs scheduled:")
-    log("  09:00 AM — Morning scan + AI analysis + Telegram alert")
-    log("  12:30 PM — Portfolio hold/sell review")
-    log("  03:00 PM — Stop loss and target checks")
-    log("  03:45 PM — EOD portfolio summary")
+    log(f"  {MORNING_SCAN_TIME} — Post-close scan + AI analysis + Telegram alert")
+    log(f"  {MIDDAY_REVIEW_TIME} — Portfolio hold/sell review")
+    log(f"  {PRECLOSE_CHECK_TIME} — Stop loss and target checks")
+    log(f"  {EOD_SUMMARY_TIME} — EOD portfolio summary")
     log("Press Ctrl+C to stop.\n")
 
-    schedule.every().day.at("09:00").do(job_morning_scan)
-    schedule.every().day.at("12:30").do(job_midday_review)
-    schedule.every().day.at("15:00").do(job_preclose_check)
-    schedule.every().day.at("15:45").do(job_eod_summary)
+    schedule.every().day.at(MORNING_SCAN_TIME).do(job_morning_scan)
+    schedule.every().day.at(MIDDAY_REVIEW_TIME).do(job_midday_review)
+    schedule.every().day.at(PRECLOSE_CHECK_TIME).do(job_preclose_check)
+    schedule.every().day.at(EOD_SUMMARY_TIME).do(job_eod_summary)
 
     while True:
         schedule.run_pending()

@@ -87,7 +87,7 @@ def main():
         )
 
     elif cmd == "scheduler":
-        from scheduler import run_scheduler
+        from schedular import run_scheduler
         run_scheduler()
 
     elif cmd == "test_telegram":

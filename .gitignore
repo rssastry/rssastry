@@ -1,0 +1,37 @@
+# ── Python build / cache artifacts ─────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+.mypy_cache/
+.pylint_cache/
+.build/
+
+# ── Virtual environments ───────────────────────────────────────
+.venv/
+venv/
+ENV/
+env/
+
+# ── Environment / secrets ──────────────────────────────────────
+.env
+*.env.local
+
+# ── Runtime caches & logs (regenerable) ────────────────────────
+data_cache/
+*.log
+signals_log.csv
+
+# ── Packages / binaries ────────────────────────────────────────
+*.whl
+*.zip
+*.tar.gz
+
+# ── OS / editor noise ──────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+.DS_Store

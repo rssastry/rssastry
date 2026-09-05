@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-09-04 21:43:30",
+  "universe_size": 140,
+  "styles": [
+    "intraday",
+    "swing",
+    "positional"
+  ],
+  "quality_proxy": 20.0,
+  "regime_filter": true,
+  "by_style": {
+    "intraday": {
+      "style": "intraday",
+      "signals": 1,
+      "suppressed_by_regime": 7,
+      "symbols_tested": 132,
+      "trades": 1,
+      "win_rate": 0.0,
+      "avg_return_pct": -1.61,
+      "median_return_pct": -1.61,
+      "best_pct": -1.61,
+      "worst_pct": -1.61,
+      "avg_hold_bars": 3.0,
+      "profit_factor": 0.0,
+      "fwd_1d_win_pct": 100.0,
+      "fwd_5d_win_pct": 0.0,
+      "fwd_10d_win_pct": 0.0,
+      "total_return_pct": -0.32,
+      "cagr": -0.0019,
+      "max_drawdown_pct": 0.0
+    },
+    "swing": {
+      "style": "swing",
+      "signals": 1,
+      "suppressed_by_regime": 3,
+      "symbols_tested": 134,
+      "trades": 1,
+      "win_rate": 0.0,
+      "avg_return_pct": -0.52,
+      "median_return_pct": -0.52,
+      "best_pct": -0.52,
+      "worst_pct": -0.52,
+      "avg_hold_bars": 13.0,
+      "profit_factor": 0.0,
+      "fwd_1d_win_pct": 100.0,
+      "fwd_5d_win_pct": 0.0,
+      "fwd_10d_win_pct": 0.0,
+      "total_return_pct": -0.1,
+      "cagr": -0.0006,
+      "max_drawdown_pct": 0.0
+    },
+    "positional": {
+      "style": "positional",
+      "signals": 1,
+      "suppressed_by_regime": 4,
+      "symbols_tested": 136,
+      "trades": 1,
+      "win_rate": 0.0,
+      "avg_return_pct": -0.29,
+      "median_return_pct": -0.29,
+      "best_pct": -0.29,
+      "worst_pct": -0.29,
+      "avg_hold_bars": 34.0,
+      "profit_factor": 0.0,
+      "fwd_1d_win_pct": 0.0,
+      "fwd_5d_win_pct": 0.0,
+      "fwd_10d_win_pct": 0.0,
+      "total_return_pct": -0.06,
+      "cagr": -0.0003,
+      "max_drawdown_pct": 0.0
+    }
+  },
+  "nifty_benchmark": {
+    "available": true,
+    "total_return_pct": -2.29,
+    "cagr": -0.0133,
+    "max_drawdown_pct": -15.18,
+    "window_years": 1.73
+  }
+}

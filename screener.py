@@ -9,11 +9,12 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from ta.momentum import RSIIndicator
-from ta.trend import MACD, EMAIndicator
+from ta.trend import MACD, EMAIndicator, ADXIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
 import warnings
 import json
 import os
+import strategies
 
 warnings.filterwarnings("ignore")
 
@@ -59,35 +60,289 @@ NSE_STOCKS = [
     "MCX.NS", "METROPOLIS.NS", "NATCOPHARM.NS", "NAVINFLUOR.NS",
     "NBCC.NS", "NLCINDIA.NS", "OLECTRA.NS",
     "PVRINOX.NS", "RAMCOCEM.NS", "RATNAMANI.NS",
-    "MPHASIS.NS", "NUVOCO.NS", "RAIN.NS",
+    "NUVOCO.NS", "RAIN.NS",
 ]
+
+# Deduplicate while preserving order
+NSE_STOCKS = list(dict.fromkeys(NSE_STOCKS))
+
+# config
+from config import (CROSSOVER_RECENCY_BARS, MAX_VOLUME_RATIO, MIN_DAILY_HISTORY,
+                    BREAKDOWN_LOOKBACK_BARS, CRASH_DAY_PCT, CRASH_DAY_VOL_MULT,
+                    FRESH_TRIGGER_BARS, BOUNCE_HIST_MIN_SAMPLES,
+                    ATR_MULT, BUY_MIN_ENSEMBLE,
+                    MAX_STOP_DISTANCE_PCT_BY_STYLE, BREAKDOWN_RESOLUTION_LOOKBACK,
+                    VOLUME_CONFIRMATION_MARGIN, REVERSAL_LOOKBACK_BARS,
+                    REVERSAL_DAY_PCT, REVERSAL_DAY_VOL_MULT,
+                    MARKET_REGIME_FAIL_CLOSED)
+from indicators import find_unresolved_breakdown
 
 # ─────────────────────────────────────────────
 # Screening Criteria by Trading Style
+# Per-share price is not an affordability or quality measure. Position sizing
+# and maximum loss determine affordability.
 # ─────────────────────────────────────────────
+SMALL_INVESTOR_MAX_PRICE = float("inf")
+
 SCREEN_CRITERIA = {
-    "intraday": {
-        "min_price": 50, "max_price": 10000,
+    "short_term": {
+        "min_price": 20, "max_price": SMALL_INVESTOR_MAX_PRICE,
         "min_volume": 1000000,
         "rsi_min": 40, "rsi_max": 65,
         "max_price_change_pct": 5,
         "min_atr_pct": 0.8,
+        "min_volume_ratio": 1.2,
+    },
+    # "intraday" is an alias for "short_term" (1-3 day swing using daily bars)
+    "intraday": {
+        "min_price": 20, "max_price": SMALL_INVESTOR_MAX_PRICE,
+        "min_volume": 1000000,
+        "rsi_min": 40, "rsi_max": 65,
+        "max_price_change_pct": 5,
+        "min_atr_pct": 0.8,
+        "min_volume_ratio": 1.2,
     },
     "swing": {
-        "min_price": 100, "max_price": 8000,
+        "min_price": 20, "max_price": SMALL_INVESTOR_MAX_PRICE,
         "min_volume": 500000,
         "rsi_min": 35, "rsi_max": 65,
         "max_price_change_pct": 8,
         "min_atr_pct": 0.5,
+        "min_volume_ratio": 1.0,
     },
     "positional": {
-        "min_price": 50, "max_price": 15000,
+        "min_price": 20, "max_price": SMALL_INVESTOR_MAX_PRICE,
         "min_volume": 200000,
         "rsi_min": 30, "rsi_max": 60,
         "max_price_change_pct": 10,
         "min_atr_pct": 0.3,
+        # Positional was 0.8x until SUNPHARMA 2026-09-02: a +0.14% bounce on
+        # 0.8x volume bought under a fresh high-volume reversal was offered as
+        # BUY and faded. Every style now needs at least average volume backed
+        # up by the VOLUME_CONFIRMATION_MARGIN surplus check in the BUY gate.
+        "min_volume_ratio": 1.0,
     }
 }
+
+
+def check_earnings_risk(symbol: str) -> dict:
+    """Check if a symbol has an earnings announcement within the blackout window.
+
+    Returns {"days_to_earnings": int|None, "earnings_date": str|None, "risk": bool}
+    """
+    from config import EARNINGS_BLACKOUT_DAYS
+    try:
+        ticker = yf.Ticker(symbol)
+        cal = ticker.calendar
+        if cal is None or cal.empty:
+            return {"days_to_earnings": None, "earnings_date": None, "risk": False}
+        # yfinance calendar may be a DataFrame or dict
+        earnings_date = None
+        if isinstance(cal, dict):
+            earnings_date = cal.get("Earnings Date")
+        elif hasattr(cal, "get"):
+            earnings_date = cal.get("Earnings Date")
+        if earnings_date is None and hasattr(cal, "index"):
+            try:
+                if "Earnings Date" in cal.index:
+                    earnings_date = cal.loc["Earnings Date"]
+            except Exception:
+                pass
+        if earnings_date is None:
+            return {"days_to_earnings": None, "earnings_date": None, "risk": False}
+        # earnings_date may be a list of dates
+        if isinstance(earnings_date, (list, tuple)) and len(earnings_date) > 0:
+            earnings_date = earnings_date[0]
+        if hasattr(earnings_date, "date"):
+            earnings_date = earnings_date.date()
+        from datetime import date
+        if isinstance(earnings_date, date):
+            days = (earnings_date - date.today()).days
+            return {
+                "days_to_earnings": days,
+                "earnings_date": str(earnings_date),
+                "risk": abs(days) <= EARNINGS_BLACKOUT_DAYS,
+            }
+        return {"days_to_earnings": None, "earnings_date": str(earnings_date), "risk": False}
+    except Exception:
+        return {"days_to_earnings": None, "earnings_date": None, "risk": False}
+
+
+def check_market_regime() -> dict:
+    """Check NIFTY 50 market regime using EMA50.
+
+    Returns {"regime": "bullish"/"bearish"/"neutral", "nifty_price": float, "nifty_ema50": float}
+    """
+    try:
+        from config import MARKET_REGIME_EMA
+        ticker = yf.Ticker("^NSEI")
+        df = ticker.history(period="1y", interval="1d")
+        if df is None or df.empty or len(df) < MARKET_REGIME_EMA:
+            return {"regime": "unknown", "nifty_price": None, "nifty_ema50": None}
+        close = df["Close"]
+        ema50 = EMAIndicator(close, window=MARKET_REGIME_EMA).ema_indicator().iloc[-1]
+        price = close.iloc[-1]
+        regime = "bullish" if price >= ema50 else "bearish"
+        return {"regime": regime, "nifty_price": round(float(price), 2), "nifty_ema50": round(float(ema50), 2)}
+    except Exception:
+        return {"regime": "unknown", "nifty_price": None, "nifty_ema50": None}
+
+
+def market_regime_blocks_buy(regime: str,
+                             fail_closed: bool = MARKET_REGIME_FAIL_CLOSED) -> tuple[bool, str]:
+    """Pure rule: should BUYs be suppressed for this regime?
+
+    Bearish always blocks. Unknown blocks UNDER FAIL-CLOSED policy: if the NIFTY
+    index data cannot confirm a supportive tape, the system must not issue fresh
+    BUYs (the old code silently passed "unknown" through — SUNPHARMA was offered
+    as BUY on 2026-09-02 while the regime read "unknown").
+
+    Returns (block_buy, reason_to_record).
+    """
+    if regime == "bearish":
+        return True, "Market regime filter: NIFTY below EMA50"
+    if regime == "unknown":
+        if fail_closed:
+            return True, (
+                "Market regime unknown (NIFTY data unavailable) — "
+                "BUY suppressed under fail-closed policy"
+            )
+        return False, ""
+    return False, ""
+
+
+def _historical_signal_win_rate(close: pd.Series, bb_pband_ser: pd.Series,
+                                rsi_ser: pd.Series, min_samples: int = 20) -> tuple:
+    """Empirical next-session win rate for the CURRENT stretched setup.
+
+    The live signal often is: close ABOVE the upper Bollinger band (BB% > 1)
+    with RSI in a trending-but-not-exhausted zone and a positive session.
+    That pattern is a classic breakout-FADE on range-bound names. This
+    measures how often such a bar is followed by an UP session.
+
+    Returns (win_pct, n_samples); win_pct is None when n < min_samples.
+    """
+    try:
+        if close is None or bb_pband_ser is None or rsi_ser is None:
+            return None, 0
+        s = pd.DataFrame({
+            "close":  close,
+            "bb":     bb_pband_ser,
+            "rsi":    rsi_ser,
+        }).dropna()
+        # live-bar conditions (mirrors the KOTAK-style stretched setup)
+        day_chg = s["close"].pct_change()
+        setup = (
+            (s["bb"] > 1.0)
+            & (s["rsi"] >= 55) & (s["rsi"] <= 68)
+            & (day_chg > 0.004)
+        )
+        nxt = s["close"].shift(-1) / s["close"] - 1
+        sub = nxt[setup].dropna()
+        n = int(len(sub))
+        if n < min_samples:
+            return None, n
+        return round(100 * float((sub > 0).mean()), 1), n
+    except Exception:
+        return None, 0
+
+
+def _bounce_after_breakdown_stats(close: pd.Series, high: pd.Series,
+                                  vol: pd.Series, crash_pct: float,
+                                  crash_vol_mult: float,
+                                  min_samples: int = BOUNCE_HIST_MIN_SAMPLES):
+    """Empirical continuation odds for the dead-cat-bounce setup.
+
+    A "breakdown day" (daily move <= crash_pct with vol >= crash_vol_mult x the
+    20-day median volume) followed by an UP session is a bounce. This returns the
+    % of such bounces that CLOSE HIGHER on the next session (continuation). A low
+    value means the bounce usually fades — the setup deserves WATCHLIST, not BUY.
+    """
+    try:
+        if close is None or len(close) < 40:
+            return None, 0
+        pct = close.pct_change() * 100.0
+        base = vol.rolling(20, min_periods=10).median()
+        vr = (vol / base.replace(0, np.nan)).clip(upper=MAX_VOLUME_RATIO)
+        results, setups = [], 0
+        for i in range(2, len(close) - 2):
+            if not (pct.iloc[i] <= crash_pct and vr.iloc[i] >= crash_vol_mult):
+                continue
+            # down day found — require the next session to be an up bounce
+            if not (close.iloc[i + 1] > close.iloc[i]):
+                continue
+            setups += 1
+            results.append(1.0 if close.iloc[i + 2] > close.iloc[i + 1] else 0.0)
+        n = len(results)
+        if n < min_samples:
+            return None, n
+        return round(100.0 * sum(results) / n, 1), n
+    except Exception:
+        return None, 0
+
+
+def _risk_adjusted_expected_value(ind: dict, style: str) -> tuple[float, str | None]:
+    """Return a rough expectancy estimate and a reason string for weak setups.
+
+    We approximate expected value as:
+      EV ≈ p_win * reward_to_risk - p_loss
+    where reward_to_risk is style-specific and adjusted for ATR stop width.
+    This is intentionally simple, but it is a useful guardrail for historical fade setups.
+    """
+    try:
+        win = ind.get("sig_win_pct")
+        samples = int(ind.get("sig_samples", 0) or 0)
+        if win is None or samples < 20:
+            return None, None
+
+        price = float(ind.get("current_price", 0) or 0)
+        atr = float(ind.get("atr", 0) or 0)
+        if price <= 0 or atr <= 0:
+            return None, None
+
+        rr_map = {"intraday": 2.0, "short_term": 2.4, "swing": 3.0, "positional": 3.5}
+        rr = float(rr_map.get(style, 3.0))
+        stop_pct = float(ATR_MULT.get(style, 2.5)) * atr / price * 100.0
+        p_win = max(0.0, min(float(win) / 100.0, 1.0))
+        p_loss = 1.0 - p_win
+        ev = (p_win * rr) - p_loss
+
+        # A wider stop compresses expected value materially.
+        if stop_pct > 6.0:
+            ev -= (stop_pct - 6.0) * 0.03
+        if ev < 0.15:
+            return round(ev, 3), f"Expected value weak: win rate {win:.0f}% with ATR stop ~{stop_pct:.1f}%"
+        if ev < 0.3:
+            return round(ev, 3), f"Expected value marginal: win rate {win:.0f}% with ATR stop ~{stop_pct:.1f}%"
+        return round(ev, 3), None
+    except Exception:
+        return None, None
+
+
+def inherit_strict_style_failures(style_failures: dict, style: str) -> list:
+    """Propagate structural failures from stricter styles to a looser style.
+
+    Structural failures (trend alignment, momentum, breakdown/reversal context,
+    fresh-trigger) are style-independent. Volume thresholds and the ATR
+    stop-distance cap are intentionally style-specific and are NOT propagated.
+    (SUNPHARMA 2026-09-02 was rejected intraday for volume but still offered as
+    a positional BUY — inherited structural/context failures must force the
+    looser style to WATCHLIST too.)
+
+    Accepts a dict mapping style -> list of failure strings, e.g.
+    {"intraday": [...]} and the target style "swing"/"positional".
+    """
+    stricter = {
+        "swing": ["intraday", "short_term"],
+        "positional": ["intraday", "short_term", "swing"],
+    }.get(style, [])
+    inherited = []
+    for st in stricter:
+        for f in style_failures.get(st, []):
+            if ("ATR stop" in f or "Volume confirmation" in f or f in inherited):
+                continue
+            inherited.append(f)
+    return inherited
 
 
 class StockScreener:
@@ -96,11 +351,19 @@ class StockScreener:
         self.results = []
         self.scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def fetch_stock_data(self, symbol: str, period: str = "60d"):
+    def fetch_stock_data(self, symbol: str, period: str = "2y"):
         try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period, interval="1d")
-            if df.empty or len(df) < 20:
+            # Use the SAME cached/downloaded pipeline as the analysis engine
+            # (data_cache.fetch_history) so the screener and the AI analyst can
+            # never disagree on price because one padded raw and the other
+            # adjusted OHLCV (HINDCOPPER 2026-08-31: 1037.4 vs 525.3).
+            try:
+                from data_cache import fetch_history
+                df = fetch_history(symbol, period=period, interval='1d')
+            except Exception:
+                ticker = yf.Ticker(symbol)
+                df = ticker.history(period=period, interval="1d")
+            if df is None or getattr(df, 'empty', True) or len(df) < MIN_DAILY_HISTORY:
                 return None
             df.dropna(inplace=True)
             return df
@@ -115,20 +378,160 @@ class StockScreener:
 
         rsi       = RSIIndicator(close, window=14).rsi().iloc[-1]
         macd_obj  = MACD(close)
-        macd_hist = macd_obj.macd_diff().iloc[-1]
+        macd_line = macd_obj.macd().iloc[-1]
+        macd_sig  = macd_obj.macd_signal().iloc[-1]
+        macd_hist_series = macd_obj.macd_diff()
+        macd_hist = macd_hist_series.iloc[-1]
+        macd_crossover = (
+            "bullish" if macd_hist_series.iloc[-1] > 0 and macd_hist_series.iloc[-2] <= 0 else
+            "bearish" if macd_hist_series.iloc[-1] < 0 and macd_hist_series.iloc[-2] >= 0 else
+            "none"
+        )
         ema9      = EMAIndicator(close, window=9).ema_indicator().iloc[-1]
         ema21     = EMAIndicator(close, window=21).ema_indicator().iloc[-1]
         ema50     = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
         bb        = BollingerBands(close, window=20, window_dev=2)
-        bb_pct    = bb.bollinger_pband().iloc[-1]
+        bb_pband_ser = bb.bollinger_pband()
+        bb_pct    = bb_pband_ser.iloc[-1]
         atr       = AverageTrueRange(high, low, close, window=14).average_true_range().iloc[-1]
         current   = close.iloc[-1]
         atr_pct   = (atr / current) * 100
-        avg_vol   = vol.iloc[-20:].mean()
+        avg_vol   = vol.iloc[-20:].median()
         vol_ratio = vol.iloc[-1] / avg_vol if avg_vol > 0 else 0
+        # cap extreme ratios
+        try:
+            vol_ratio = min(float(vol_ratio), MAX_VOLUME_RATIO)
+        except Exception:
+            vol_ratio = 0
+
+        # ── Partial-day volume handling ─────────────────────────────
+        # If the last bar is today (market open), the current day's volume
+        # is incomplete and will make volume_ratio artificially low.
+        # Use the previous complete day's volume ratio for confirmation.
+        vol_ratio_prev_day = 0.0
+        try:
+            last_date = df.index[-1]
+            if hasattr(last_date, "date"):
+                last_date = last_date.date()
+            from datetime import date
+            is_today = (last_date == date.today())
+            if is_today and len(vol) >= 2:
+                prev_vol = vol.iloc[-2]
+                vol_ratio_prev_day = prev_vol / avg_vol if avg_vol > 0 else 0
+                vol_ratio_prev_day = min(float(vol_ratio_prev_day), MAX_VOLUME_RATIO)
+        except Exception:
+            vol_ratio_prev_day = 0.0
+        # Use the more reliable (complete-day) ratio for eligibility checks
+        effective_vol_ratio = vol_ratio_prev_day if vol_ratio_prev_day > 0 else vol_ratio
         prev_close= close.iloc[-2]
         price_change_pct = ((current - prev_close) / prev_close) * 100
-        high_52w  = high.iloc[-252:].max() if len(high) >= 252 else high.max()
+
+        # ── Breakdown / dead-cat-bounce awareness ─────────────────────
+        # A high-volume breakdown day followed by an up-day bounce is scored
+        # positively by the momentum rules (+Volume surge, +Positive day), but
+        # unless the bounce reclaims the broken swing high AND carries a fresh
+        # bullish trigger it is a classic bull trap. Detect and expose it here
+        # so scoring, eligibility, AI prompt and dashboard can all react.
+        recent_breakdown_day = False
+        breakdown_info = {}
+        open_price_now   = float(df["Open"].iloc[-1])
+        gap_pct          = ((open_price_now - prev_close) / prev_close) * 100 if prev_close else 0.0
+        pct_ser          = close.pct_change() * 100.0
+        vol_base         = vol.rolling(20, min_periods=10).median()
+        vol_ratio_ser    = (vol / vol_base.replace(0, np.nan)).fillna(0).clip(upper=MAX_VOLUME_RATIO)
+        lookback         = min(int(BREAKDOWN_LOOKBACK_BARS), max(len(df) - 2, 0))
+        for k in range(1, lookback + 1):
+            i = len(df) - 1 - k
+            if i <= 1:
+                continue
+            if (pct_ser.iloc[i] <= CRASH_DAY_PCT and vol_ratio_ser.iloc[i] >= CRASH_DAY_VOL_MULT):
+                recent_breakdown_day = True
+                pre_win = high.iloc[max(0, i - 5):i]
+                breakdown_info = {
+                    "date":          df.index[i].strftime("%Y-%m-%d") if hasattr(df.index[i], "strftime") else str(df.index[i]),
+                    "change_pct":    round(float(pct_ser.iloc[i]), 2),
+                    "volume_ratio":  round(float(vol_ratio_ser.iloc[i]), 2),
+                    "reclaim_level": round(float(pre_win.max()) if len(pre_win) else float(high.iloc[i]), 2),
+                }
+                break
+        reclaim_needed = breakdown_info.get("reclaim_level") if recent_breakdown_day else None
+        reclaims_breakdown_level = bool(reclaim_needed and current >= reclaim_needed)
+        bounce_after_breakdown   = bool(recent_breakdown_day and price_change_pct > 0)
+
+        # ── Recent high-volume reversal guard (SUNPHARMA 2026-09-01) ──
+        # A distribution candle (<= REVERSAL_DAY_PCT on >= REVERSAL_DAY_VOL_MULT
+        # volume) close to the signal bar means the "positive day" that follows
+        # is usually a low-volume bounce back into overhead supply. Unless the
+        # latest close reclaims the broken swing high, the gate must treat it
+        # as WATCHLIST. Unlike the breakdown guard (2-bar, -4% crash) this
+        # catches milder -2% reversals within REVERSAL_LOOKBACK_BARS bars.
+        recent_reversal_day = False
+        reversal_info = {}
+        rev_lookback = min(int(REVERSAL_LOOKBACK_BARS), max(len(df) - 3, 0))
+        for k_r in range(1, rev_lookback + 1):
+            i_r = len(df) - 1 - k_r
+            if i_r <= 1:
+                continue
+            if (pct_ser.iloc[i_r] <= REVERSAL_DAY_PCT
+                    and vol_ratio_ser.iloc[i_r] >= REVERSAL_DAY_VOL_MULT):
+                pre_r_win = high.iloc[max(0, i_r - 5):i_r]
+                reversal_info = {
+                    "date":          df.index[i_r].strftime("%Y-%m-%d") if hasattr(df.index[i_r], "strftime") else str(df.index[i_r]),
+                    "change_pct":    round(float(pct_ser.iloc[i_r]), 2),
+                    "volume_ratio":  round(float(vol_ratio_ser.iloc[i_r]), 2),
+                    "reclaim_level": round(float(pre_r_win.max()) if len(pre_r_win) else float(high.iloc[i_r]), 2),
+                }
+                recent_reversal_day = True
+                break
+        reclaims_reversal_level = bool(
+            reversal_info.get("reclaim_level")
+            and current >= reversal_info["reclaim_level"]
+        ) if recent_reversal_day else None
+
+        # fresh MACD bullish cross within the last FRESH_TRIGGER_BARS
+        fresh_macd = False
+        hist_vals  = macd_hist_series.values
+        for k2 in range(1, min(FRESH_TRIGGER_BARS + 1, len(hist_vals) - 1)):
+            j = len(hist_vals) - 1 - k2
+            if j <= 0:
+                break
+            if hist_vals[j] > 0 and hist_vals[j - 1] <= 0:
+                fresh_macd = True
+                break
+
+        # empirical continuation stats for this exact setup on this symbol
+        bounce_win_pct, bounce_samples = _bounce_after_breakdown_stats(
+            close, high, vol, CRASH_DAY_PCT, CRASH_DAY_VOL_MULT,
+            min_samples=BOUNCE_HIST_MIN_SAMPLES)
+        day_range = max(float(high.iloc[-1]) - float(low.iloc[-1]), 1e-9)
+        close_location = float((current - low.iloc[-1]) / day_range)
+
+        # ── Persistent unresolved-breakdown (until reclaim) ─────────────
+        # Same guarantee as the analysis engine: a high-volume crash stays a
+        # cap on the stock until the broken swing high is reclaimed.
+        unresolved_breakdown, unresolved_info = find_unresolved_breakdown(
+            close, high, vol, index=df.index,
+            lookback=BREAKDOWN_RESOLUTION_LOOKBACK)
+
+        # corporate-action anomaly flag from the shared data pipeline
+        data_anomaly = ""
+        try:
+            if "data_anomaly_str" in df.columns:
+                _a = str(df["data_anomaly_str"].dropna().iloc[-1])
+                data_anomaly = _a if _a.lower() not in ("", "nan") else ""
+        except Exception:
+            pass
+        adx = ADXIndicator(high, low, close, window=14).adx().iloc[-1]
+        obv = (np.sign(close.diff()).fillna(0) * vol).cumsum()
+        obv_trend = "rising" if len(obv) >= 5 and obv.iloc[-1] > obv.iloc[-5] else "falling"
+        bull_signal_count = sum([
+            ema9 > ema21, current > ema50, macd_hist > 0, adx >= 20,
+            vol_ratio >= 1.0, price_change_pct > 0,
+        ])
+        # 52-week high/low — only meaningful with >= 252 trading sessions
+        n_52w = min(252, len(high))
+        high_52w  = high.iloc[-n_52w:].max()
+        low_52w   = low.iloc[-n_52w:].min()
 
         ema21_series = EMAIndicator(close, window=21).ema_indicator()
         ema50_series = EMAIndicator(close, window=50).ema_indicator()
@@ -151,6 +554,7 @@ class StockScreener:
 
                 if pd.notna(rsi_day) and 50 <= float(rsi_day) <= 65 and day_volume_ratio >= 1.5 and above_both:
                     bullish_crossover_rule = {
+                        "bar_index": idx,
                         "date": df.index[idx].strftime("%Y-%m-%d") if hasattr(df.index[idx], "strftime") else str(df.index[idx]),
                         "volume_ratio": round(float(day_volume_ratio), 2),
                         "rsi": round(float(rsi_day), 2),
@@ -169,6 +573,7 @@ class StockScreener:
 
                 if pd.notna(rsi_day) and 35 <= float(rsi_day) <= 50 and day_volume_ratio >= 1.5 and below_both:
                     bearish_crossover_rule = {
+                        "bar_index": idx,
                         "date": df.index[idx].strftime("%Y-%m-%d") if hasattr(df.index[idx], "strftime") else str(df.index[idx]),
                         "volume_ratio": round(float(day_volume_ratio), 2),
                         "rsi": round(float(rsi_day), 2),
@@ -177,17 +582,76 @@ class StockScreener:
                         "ema50": round(float(curr_ema50), 2),
                     }
 
-        buy_rule_passed = bullish_crossover_rule is not None
-        sell_rule_passed = bearish_crossover_rule is not None
-        low_52w   = low.iloc[-252:].min()  if len(low)  >= 252 else low.min()
+        # require the crossover to be recent (last trading bars) to avoid stale signals.
+        # Uses TRADING BARS, not calendar days (Friday -> Monday is one bar).
+        if bullish_crossover_rule is not None:
+            try:
+                buy_rule_passed = (len(df) - 1 - bullish_crossover_rule["bar_index"]) <= CROSSOVER_RECENCY_BARS
+            except Exception:
+                buy_rule_passed = True
+        else:
+            buy_rule_passed = False
+
+        if bearish_crossover_rule is not None:
+            try:
+                sell_rule_passed = (len(df) - 1 - bearish_crossover_rule["bar_index"]) <= CROSSOVER_RECENCY_BARS
+            except Exception:
+                sell_rule_passed = True
+        else:
+            sell_rule_passed = False
         pct_from_52w_high = ((current - high_52w) / high_52w) * 100
+
+        # A BUY needs a fresh trigger: a MACD bullish cross in the last
+        # FRESH_TRIGGER_BARS, or a fresh EMA21/50 crossover (buy_rule_passed).
+        fresh_bullish_trigger = bool(fresh_macd or buy_rule_passed)
+
+        # Multi-timeframe confirmation for the daily setup.
+        weekly_trend = 'unknown'
+        multi_tf_confirm = False
+        try:
+            weekly = df[['Open','High','Low','Close','Volume']].resample('W-FRI').agg({
+                'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+            }).dropna()
+            if len(weekly) >= 8:
+                w_close = weekly['Close']
+                w_ema21 = EMAIndicator(w_close, window=21).ema_indicator()
+                w_ema50 = EMAIndicator(w_close, window=50).ema_indicator()
+                if w_ema21.iloc[-1] > w_ema50.iloc[-1]:
+                    weekly_trend = 'bullish'
+                elif w_ema21.iloc[-1] < w_ema50.iloc[-1]:
+                    weekly_trend = 'bearish'
+                else:
+                    weekly_trend = 'neutral'
+                if (ema21 > ema50 and w_ema21.iloc[-1] > w_ema50.iloc[-1]) or (
+                    ema21 < ema50 and w_ema21.iloc[-1] < w_ema50.iloc[-1]):
+                    multi_tf_confirm = True
+        except Exception:
+            weekly_trend = 'unknown'
+            multi_tf_confirm = False
+
+        # Empirical validation of the LIVE stretched-breakout setup
+        sig_win_pct, sig_n = _historical_signal_win_rate(close, bb_pband_ser, rsi_series)
 
         return {
             "current_price":      round(current, 2),
             "prev_close":         round(prev_close, 2),
+            "open_price":         round(float(df["Open"].iloc[-1]), 2),
             "price_change_pct":   round(price_change_pct, 2),
+            "change_pct":         round(price_change_pct, 2),
             "rsi":                round(rsi, 2),
+            "rsi_prev":           round(float(rsi_series.iloc[-2]), 2),
+            "macd":               round(float(macd_line), 4),
+            "macd_signal":        round(float(macd_sig), 4),
             "macd_hist":          round(macd_hist, 4),
+            "macd_crossover":     macd_crossover,
+            "weekly_trend":       weekly_trend,
+            "multi_tf_confirm":   multi_tf_confirm,
+            "adx":                round(float(adx), 2),
+            "trend_strength":     "strong" if adx >= 25 else "adequate" if adx >= 20 else "weak",
+            "obv_trend":          obv_trend,
+            "candle_pattern":     "none",
+            "bull_signal_count":  bull_signal_count,
+            "overall_signal":     "bullish" if bull_signal_count >= 4 else "neutral" if bull_signal_count >= 3 else "bearish",
             "ema9":               round(ema9, 2),
             "ema21":              round(ema21, 2),
             "ema50":              round(ema50, 2),
@@ -200,20 +664,79 @@ class StockScreener:
             "volume":             int(vol.iloc[-1]),
             "avg_volume_20d":     int(avg_vol),
             "volume_ratio":       round(vol_ratio, 2),
+            "effective_vol_ratio": round(effective_vol_ratio, 2),
             "high_52w":           round(high_52w, 2),
             "low_52w":            round(low_52w, 2),
             "pct_from_52w_high":  round(pct_from_52w_high, 2),
             "support":            round(low.iloc[-10:].min(), 2),
+            "support_1":          round(low.iloc[-10:].min(), 2),
+            "support_2":          round(low.iloc[-20:].min(), 2),
             "resistance":         round(high.iloc[-10:].max(), 2),
+            "resistance_1":       round(high.iloc[-10:].max(), 2),
+            "resistance_2":       round(high.iloc[-20:].max(), 2),
             "buy_rule_passed":    buy_rule_passed,
             "buy_rule_details":   bullish_crossover_rule or {},
             "sell_rule_passed":   sell_rule_passed,
             "sell_rule_details":  bearish_crossover_rule or {},
+            "sig_win_pct":        sig_win_pct,
+            "sig_samples":        sig_n,
+            "data_as_of":         str(df.index[-1]),
+
+            # ── Breakdown / dead-cat-bounce awareness ──────────────────
+            "recent_breakdown_day":   recent_breakdown_day,
+            "breakdown_date":         breakdown_info.get("date"),
+            "breakdown_change_pct":   breakdown_info.get("change_pct"),
+            "breakdown_volume_ratio": breakdown_info.get("volume_ratio"),
+            "breakdown_reclaim_level": reclaim_needed,
+            "reclaims_breakdown_level": reclaims_breakdown_level,
+            "bounce_after_breakdown": bounce_after_breakdown,
+            "fresh_bullish_trigger":  fresh_bullish_trigger,
+            "bounce_win_pct":         bounce_win_pct,
+            "bounce_samples":         bounce_samples,
+            "unresolved_breakdown":        unresolved_breakdown,
+            "unresolved_breakdown_date":   unresolved_info.get("date"),
+            "unresolved_reclaim_level":    unresolved_info.get("reclaim_level"),
+            # ── Recent high-volume reversal (SUNPHARMA 2026-09-01) ───────
+            "recent_reversal_day":         recent_reversal_day,
+            "reversal_date":               reversal_info.get("date"),
+            "reversal_change_pct":         reversal_info.get("change_pct"),
+            "reversal_volume_ratio":       reversal_info.get("volume_ratio"),
+            "reversal_reclaim_level":      reversal_info.get("reclaim_level"),
+            "reclaims_reversal_level":     reclaims_reversal_level,
+            "data_anomaly":                data_anomaly,
+            "gap_pct":                round(gap_pct, 2),
+            "close_location":         round(close_location, 3),
         }
 
     def score_stock(self, ind: dict, style: str):
         score   = 0
         signals = []
+
+        # Recent price action is a critical risk gate. Weak closes should not be rewarded.
+        price_change_pct = ind.get("price_change_pct", 0)
+        if price_change_pct < -1.0:
+            score -= 20
+            signals.append(f"Recent weakness: {price_change_pct:.2f}%")
+        elif price_change_pct < 0:
+            score -= 8
+            signals.append(f"Minor weakness: {price_change_pct:.2f}%")
+        elif price_change_pct > 0:
+            score += 10
+            signals.append(f"Positive day: +{price_change_pct:.2f}%")
+
+        if ind.get("macd_crossover") == "bearish":
+            score -= 15
+            signals.append("MACD bearish crossover")
+        elif ind.get("macd_hist", 0) > 0:
+            score += 12
+            signals.append("MACD histogram positive")
+
+        if ind.get("adx", 0) < 20:
+            score -= 12
+            signals.append(f"Weak trend: ADX {ind.get('adx', 0)} below 20")
+        elif ind.get("adx", 0) < 25:
+            score -= 5
+            signals.append(f"Trend still soft: ADX {ind.get('adx', 0)}")
 
         if ind["ema9"] > ind["ema21"] > ind["ema50"]:
             score += 20
@@ -221,10 +744,6 @@ class StockScreener:
         elif ind["ema9"] > ind["ema21"]:
             score += 12
             signals.append("Short-term bullish: EMA9 > EMA21")
-
-        if ind["macd_hist"] > 0:
-            score += 12
-            signals.append("MACD histogram positive")
 
         if ind["current_price"] > ind["ema21"]:
             score += 8
@@ -253,35 +772,106 @@ class StockScreener:
             score += 8
             signals.append(f"RSI strong momentum ({rsi})")
 
-        if ind["price_change_pct"] > 0:
-            score += 10
-            signals.append(f"Positive day: +{ind['price_change_pct']}%")
+        # Exhaustion guard: beyond ~52w-hot there is little room left; buying
+        # momentum at the top of a range is how the KOTAK-style fades happen.
+        if rsi >= 70:
+            score -= 10
+            signals.append(f"RSI overbought ({rsi}) — entry near exhaustion")
+        elif rsi > 68:
+            score -= 5
+            signals.append(f"RSI in hot zone ({rsi}) — reduced upside room")
 
-        if ind["volume_ratio"] >= 2.0:
+        # Use effective volume ratio (handles partial-day volume during market hours)
+        eff_vol = ind.get("effective_vol_ratio", ind.get("volume_ratio", 0))
+        if eff_vol >= 2.0:
             score += 20
-            signals.append(f"Volume surge: {ind['volume_ratio']}x average")
-        elif ind["volume_ratio"] >= 1.5:
+            signals.append(f"Volume surge: {eff_vol}x average")
+        elif eff_vol >= 1.5:
             score += 14
-            signals.append(f"Above avg volume: {ind['volume_ratio']}x")
-        elif ind["volume_ratio"] >= 1.0:
+            signals.append(f"Above avg volume: {eff_vol}x")
+        elif eff_vol >= 1.0:
             score += 7
-            signals.append(f"Normal volume: {ind['volume_ratio']}x")
+            signals.append(f"Normal volume: {eff_vol}x")
 
         if 0.2 <= ind["bb_pct"] <= 0.5:
             score += 15
-            signals.append("Price in lower-mid Bollinger zone")
+            signals.append(f"Price in lower-mid Bollinger zone (BB% {ind['bb_pct']})")
         elif ind["bb_pct"] < 0.2:
             score += 10
-            signals.append("Near lower Bollinger Band")
+            signals.append(f"Near lower Bollinger Band (BB% {ind['bb_pct']})")
+        elif ind["bb_pct"] > 1.0:
+            # A close ABOVE the upper band (BB%>1) is a stretched, mean-reverting
+            # state. On range-bound names it is a breakout-FADE, not momentum.
+            score -= 10
+            signals.append(f"Stretched above upper Bollinger (BB% {ind['bb_pct']}) — breakout-fade risk")
+        elif ind["bb_pct"] > 0.8:
+            # Near the upper band there is little headroom; the ideal entry zone
+            # for INTRADAY/SWING is lower-mid band, not the stretched top.
+            score -= 5
+            signals.append(f"Close to upper band (BB% {ind['bb_pct']}) — limited upside room")
 
-        if style == "intraday" and ind["atr_pct"] >= 1.5:
+        # ── Dead-cat-bounce discount ──────────────────────────────────
+        # A positive-day up-move after a high-volume breakdown day only earns
+        # its momentum points when the bounce reclaimed the broken swing high
+        # AND carries a fresh bullish trigger (MACD/EMA cross). Otherwise the
+        # +Volume surge / +Positive day awards imply a bull-trap structure and
+        # are neutralized below (the setup often fades the next sessions).
+        if ind.get("recent_breakdown_day"):
+            reclaimed = ind.get("reclaims_breakdown_level", False)
+            fresh = ind.get("fresh_bullish_trigger", False)
+            if not (reclaimed and fresh):
+                score -= 25
+                signals.append("Dead-cat bounce: up-day after breakdown without "
+                               "reclaim + fresh trigger")
+            elif not fresh:
+                score -= 10
+            bw = ind.get("bounce_win_pct")
+            bs = ind.get("bounce_samples", 0)
+            if bw is not None and bs >= BOUNCE_HIST_MIN_SAMPLES and bw < 45:
+                score -= 10
+                signals.append(f"Bounce-fade history: continuation only {bw:.0f}% "
+                               f"({bs} samples)")
+        elif ind.get("price_change_pct", 0) < 0 and eff_vol >= 1.5:
+            # high-volume down day without a preceding crash: warn, do not award
+            score -= 10
+            signals.append("High-volume down day — distribution risk")
+
+        # Fresh-trigger discipline outside the breakdown case: an otherwise
+        # rolling stock without a fresh MACD/EMA cross is a momentum "drift" —
+        # mark it explicitly so the AI and users know the candle, not a trigger.
+        if not ind.get("recent_breakdown_day"):
+            if (not ind.get("fresh_bullish_trigger", False)
+                    and not ind.get("macd_crossover") == "bullish"):
+                signals.append("No fresh bullish crossover — drift, not a trigger")
+
+        # Empirical fade check: a stretched above-band setup that historically
+        # does NOT deliver next-day gains on this symbol gets discounted.
+        sig_win = ind.get("sig_win_pct")
+        sig_n = ind.get("sig_samples", 0)
+        if sig_win is not None and sig_n >= 20 and sig_win < 50:
+            score -= 12
+            signals.append(f"Breakout-fade history: setup wins next day only {sig_win:.0f}% ({sig_n} sessions)")
+
+        # Risk-adjusted expectancy gate: a system with weak historical success and
+        # a wide ATR stop is not a buy just because it looks good on a single day.
+        ev, ev_reason = _risk_adjusted_expected_value(ind, style)
+        if ev is not None:
+            if ev < 0.15:
+                score -= 15
+                signals.append(ev_reason)
+            elif ev < 0.3:
+                score -= 8
+                if ev_reason:
+                    signals.append(ev_reason)
+
+        if style in ("intraday", "short_term") and ind["atr_pct"] >= 1.5:
             score += 5
-            signals.append(f"High intraday volatility (ATR {ind['atr_pct']}%)")
+            signals.append(f"High short-term volatility (ATR {ind['atr_pct']}%)")
         if style == "positional" and ind["pct_from_52w_high"] > -20:
             score += 5
             signals.append("Near 52-week high")
 
-        return min(score, 100), signals
+        return min(max(score, 0), 100), signals
 
     def passes_filter(self, ind: dict, style: str) -> bool:
         c = SCREEN_CRITERIA[style]
@@ -295,11 +885,177 @@ class StockScreener:
             and ind["pct_from_52w_high"] >= -45
         )
 
+    def evaluate_buy_eligibility(self, ind: dict, style: str) -> tuple[bool, list[str]]:
+        """Deterministic, auditable buy gate. AI commentary cannot override it."""
+        c = SCREEN_CRITERIA[style]
+        failures = []
+        if not (ind["ema9"] > ind["ema21"] > ind["ema50"]):
+            failures.append("EMA trend is not aligned (EMA9 > EMA21 > EMA50)")
+        if ind["current_price"] <= ind["ema21"]:
+            failures.append("Price is not above EMA21")
+        if ind.get("macd_hist", 0) <= 0 or ind.get("macd_crossover") == "bearish":
+            failures.append("MACD momentum is not bullish")
+        if ind.get("adx", 0) < 20:
+            failures.append(f"Trend strength is weak (ADX {ind.get('adx', 0)})")
+        # Use effective volume ratio (handles partial-day volume during market hours).
+        # Two layers: the raw minimum must be STRICTLY exceeded (no boundary pass),
+        # then a confirmation-margin check — a ratio only marginally above the
+        # floor is not real volume confirmation. (SUNPHARMA 2026-09-02 printed a
+        # 0.8x bounce that exactly met the old 0.8x positional floor and was
+        # offered as BUY; it faded the next session.)
+        eff_vol = float(ind.get("effective_vol_ratio", ind.get("volume_ratio", 0)) or 0)
+        min_vol = float(c["min_volume_ratio"])
+        if eff_vol <= min_vol:
+            failures.append(f"Volume confirmation below {min_vol:g}x average")
+        elif eff_vol < min_vol * VOLUME_CONFIRMATION_MARGIN:
+            failures.append(
+                f"Volume confirmation is marginal ({eff_vol:.2f}x vs "
+                f"{min_vol:g}x minimum with {VOLUME_CONFIRMATION_MARGIN:g}x buffer)"
+            )
+        if ind.get("price_change_pct", 0) < -1:
+            failures.append("Recent daily price weakness exceeds 1%")
+        # Weekly / multi-timeframe confirmation — a daily signal fighting the
+        # weekly trend is a lower-conviction trade. For a STRONG recommendation
+        # the weekly trend must agree (daily & weekly EMA21/50 on the same side).
+        # Missing data is treated as UNKNOWN, not a hard fail, so a no-data / partial
+        # object does not get rejected by default. Only explicit disagreement fails.
+        tf_confirm = ind.get("multi_tf_confirm")
+        if tf_confirm is False:
+            failures.append(
+                "Weekly trend does not confirm the daily setup (multi-TF disagreement)"
+            )
+        # ── Fresh-trigger requirement ────────────────────────────────
+        # A BUY must be anchored to a real bullish ignition: a fresh MACD line
+        # bullish cross (within FRESH_TRIGGER_BARS) or a fresh EMA21/50 crossover.
+        # A stock that is merely "above its EMAs with a slightly positive session"
+        # but has no cross is a drift trade with no edge. Positional allows a
+        # strong-trend exception: ADX>=25, real volume and weekly confirmation.
+        fresh_trigger = bool(ind.get("fresh_bullish_trigger", False))
+        if style in ("intraday", "short_term", "swing"):
+            if not fresh_trigger:
+                failures.append(
+                    "No fresh bullish trigger within lookback (need MACD line cross "
+                    "or EMA21/50 crossover) — drift without ignition"
+                )
+        elif not fresh_trigger:
+            strong_trend = float(ind.get("adx", 0) or 0) >= 25
+            strong_vol = eff_vol >= 1.0
+            tf_ok = ind.get("multi_tf_confirm") is not False
+            if not (strong_trend and strong_vol and tf_ok):
+                failures.append(
+                    "No fresh bullish trigger and trend too weak for a positional BUY "
+                    "(need ADX>=25, volume>=1.0x and weekly confirmation)"
+                )
+        # Stop-distance cap: if the ATR stop sits too far below entry, one
+        # adverse day (or a gap) inflicts an outsized loss. HINDCOPPER
+        # (2026-08-21, swing BUY @ 560, stop ~₹499.8 ≈ 10.5% away) then printed a
+        # -7.2% crash day that never stopped the position out. Cap it.
+        price = ind.get("current_price", 0) or 0
+        atr = ind.get("atr", 0) or 0
+        atr_mult = ATR_MULT.get(style, 2.5)
+        stop_pct = (atr_mult * atr / price) * 100 if (atr > 0 and price > 0) else 0.0
+        cap = MAX_STOP_DISTANCE_PCT_BY_STYLE.get(style, 8.0)
+        if stop_pct > cap:
+            failures.append(
+                f"ATR stop distance too wide ({stop_pct:.1f}% > {cap:.1f}% cap) — "
+                f"a single bad day risks {stop_pct:.0f}% of the position"
+            )
+        # Persistent unresolved-breakdown guard — a high-volume crash that has
+        # NOT been reclaimed blocks BUY regardless of how many bars have passed
+        # since the crash (HINDCOPPER crashed 2026-08-24, still below 586.75).
+        if ind.get("unresolved_breakdown"):
+            lvl = ind.get("unresolved_reclaim_level")
+            d = ind.get("unresolved_breakdown_date")
+            lvl_txt = f" (still below ₹{lvl})" if lvl else ""
+            failures.append(
+                f"Unresolved high-volume breakdown {d or 'recently'}{lvl_txt} — "
+                f"price never reclaimed the broken swing high; WATCHLIST only"
+            )
+        # Stretched breakout guard: a close ABOVE the upper Bollinger (BB%>1)
+        # is mean-reversion territory. Require that the momentum is confirmed
+        # by a fresh EMA21/50 crossover, otherwise it is a breakout-FADE.
+        if ind.get("bb_pct", 0) > 1.0 and not ind.get("buy_rule_passed", False):
+            failures.append(
+                f"Price stretched above upper Bollinger (BB% {ind.get('bb_pct')}) "
+                "without EMA21/50 crossover confirmation — breakout-fade risk"
+            )
+        # Exhaustion guard for short-term entries
+        rsi_now = ind.get("rsi", 0)
+        if rsi_now >= 70:
+            failures.append(f"RSI overbought ({rsi_now}) — no entry headroom")
+        # Empirical fade check — this symbol's own history says the setup fades
+        if ind.get("sig_samples", 0) >= 20 and ind.get("sig_win_pct") is not None \
+                and ind.get("sig_win_pct") < 45:
+            failures.append(
+                f"Historical fade: this stretched setup wins next session only "
+                f"{ind.get('sig_win_pct')}% ({ind.get('sig_samples')} samples)"
+            )
+
+        ev, ev_reason = _risk_adjusted_expected_value(ind, style)
+        if ev is not None and ev < 0.15:
+            failures.append(ev_reason or "Expected value is too weak for a new BUY")
+        # ── Dead-cat-bounce guard ─────────────────────────────────────
+        # After a high-volume breakdown day, a one-off up-day rally that has
+        # NOT reclaimed the broken swing high is a bull trap — participants buy
+        # the bounce, institutions distribute into it, price fades. Require:
+        #   1) the broken swing high to be reclaimed, and
+        #   2) a fresh bullish trigger (MACD cross / fresh EMA21-50 cross)
+        # to upgrade the setup to BUY. Otherwise it remains a WATCHLIST.
+        if ind.get("recent_breakdown_day"):
+            lvl = ind.get("breakdown_reclaim_level")
+            if not ind.get("reclaims_breakdown_level", False):
+                lvl_txt = f" (reclaim ₹{lvl})" if lvl else ""
+                failures.append(
+                    f"Bounce after high-volume breakdown — price below broken swing "
+                    f"high{lvl_txt}; no reclaim confirmation"
+                )
+            if not ind.get("fresh_bullish_trigger", False):
+                failures.append(
+                    "Bounce after breakdown lacks a fresh MACD/EMA bullish "
+                    "crossover — WATCHLIST only, not a confirmed BUY"
+                )
+            bw = ind.get("bounce_win_pct")
+            bs = ind.get("bounce_samples", 0)
+            if bw is not None and bs >= BOUNCE_HIST_MIN_SAMPLES and bw < 45:
+                failures.append(
+                    f"Historical bounce-fade: after similar setups the next-session "
+                    f"continuation is only {bw}% ({bs} samples)"
+                )
+        # ── Recent high-volume reversal guard (SUNPHARMA 2026-09-01) ──
+        # A distribution candle within REVERSAL_LOOKBACK_BARS that has NOT been
+        # reclaimed means the signal bar is a low-volume bounce into overhead
+        # supply. The exact SUNPHARMA shape: -2.8% on 2.3x volume at the 1984.8
+        # swing high on 2026-09-01, then a +0.14% on 0.8x volume on 09-02 was
+        # offered as positional BUY — the next session faded -0.8%.
+        if ind.get("recent_reversal_day"):
+            r_lvl = ind.get("reversal_reclaim_level")
+            if not ind.get("reclaims_reversal_level", False):
+                lvl_txt = f" (reclaim ₹{r_lvl})" if r_lvl else ""
+                d_txt = ind.get("reversal_date", "recently")
+                r_chg = ind.get("reversal_change_pct")
+                r_vr = ind.get("reversal_volume_ratio")
+                failures.append(
+                    f"Recent high-volume reversal {d_txt}: {r_chg}% on {r_vr}x volume"
+                    f"{lvl_txt} NOT reclaimed — low-volume bounce into overhead supply"
+                )
+        return not failures, failures
+
     def screen(self, styles=["intraday","swing","positional"], top_n=10) -> dict:
         print(f"\n{'='*55}")
         print(f"  NSE/BSE Stock Screener — {self.scan_time}")
         print(f"  Scanning {len(NSE_STOCKS)} stocks...")
         print(f"{'='*55}\n")
+
+        # Market regime filter — do not allow new buys in a bearish market
+        market_regime = check_market_regime()
+        regime = market_regime.get("regime", "unknown")
+        print(f"  Market regime: {regime.upper()}")
+        if regime == "bearish":
+            print("  ⚠ NIFTY below EMA50 — new BUY signals suppressed (market-regime filter).")
+        elif regime == "unknown" and MARKET_REGIME_FAIL_CLOSED:
+            print("  ⚠ NIFTY regime UNKNOWN (index data unavailable) — BUY signals "
+                  "suppressed under fail-closed policy.")
+        print()
 
         all_results = {style: [] for style in styles}
         total = len(NSE_STOCKS)
@@ -314,23 +1070,131 @@ class StockScreener:
             except Exception:
                 continue
 
+            # fetch fundamentals (yfinance.info) once per symbol and compute strategy scores
+            try:
+                ticker_obj = yf.Ticker(symbol)
+                fundamentals = ticker_obj.info or {}
+            except Exception:
+                fundamentals = {}
+
+            try:
+                from fundamental_snapshots import record_snapshot
+                record_snapshot(symbol, fundamentals)
+            except Exception:
+                pass
+
+            sector = (fundamentals.get('sector') or '')
+
+            buff_score, buff_reasons = strategies.score_buffett(ind, fundamentals, sector=sector)
+            graham_score, graham_reasons = strategies.score_graham(ind, fundamentals, sector=sector)
+            lynch_score, lynch_reasons = strategies.score_lynch(ind, fundamentals)
+            templeton_score, templeton_reasons = strategies.score_templeton(ind, fundamentals)
+            greenblatt_score, greenblatt_reasons = strategies.score_greenblatt(ind, fundamentals, sector=sector)
+            marks_score, marks_reasons = strategies.score_marks(ind, fundamentals)
+            rakesh_score, rakesh_reasons = strategies.score_rakesh(ind, fundamentals)
+            try:
+                fundamentals['symbol'] = symbol
+                roce_score, roce_reasons, roce_metrics = strategies.score_roce_reinvest(ind, fundamentals, sector=sector)
+            except Exception:
+                roce_score, roce_reasons, roce_metrics = 0, ["roce scorer failed"], {"roce": None, "reinvest": None}
+
+            # ── Cross-style consistency ────────────────────────────────
+            # Track per-style eligibility failures per symbol. A structural
+            # rejection (trend, momentum, breakdown/reversal, trigger) in a
+            # stricter style must not be re-offered by a looser style — the
+            # SUNPHARMA 2026-09-02 shape was intraday WATCHLIST becoming a
+            # positional BUY.
+            style_failures = {}
+
             for style in styles:
-                if self.passes_filter(ind, style):
-                    score, signals = self.score_stock(ind, style)
-                    if score >= 30:
-                        all_results[style].append({
-                            "symbol":    symbol.replace(".NS", ""),
-                            "yf_symbol": symbol,
-                            "style":     style,
-                            "score":     score,
-                            "signals":   signals,
-                            **ind
-                        })
+                    if self.passes_filter(ind, style):
+                        score, signals = self.score_stock(ind, style)
+
+                        # Technical setup drives a trade; fundamentals are a
+                        # bounded quality overlay. Weights sum to exactly one.
+                        quality_score = (buff_score + graham_score + greenblatt_score + roce_score) / 4
+                        ensemble_score = int(round(score * 0.70 + quality_score * 0.30))
+
+                        if ensemble_score >= BUY_MIN_ENSEMBLE:
+                            is_buy, failed_checks = self.evaluate_buy_eligibility(ind, style)
+
+                            # Inherit structural failures from stricter styles.
+                            inherited = inherit_strict_style_failures(style_failures, style)
+                            if inherited:
+                                is_buy = False
+                                failed_checks = list(failed_checks) + inherited
+                            style_failures[style] = list(failed_checks)
+
+                            # Corporate-action data anomaly: the price series is
+                            # unreliable (split/bonus), so NO signal may be issued
+                            # on it. (HINDCOPPER 2026-08-31 morning run used a
+                            # pre-split price of 1037.4 vs the real 525.3.)
+                            anomaly = ind.get("data_anomaly", "") or ""
+                            if anomaly:
+                                is_buy = False
+                                failed_checks = failed_checks + [anomaly]
+
+                            # Market-regime filter: suppress BUY in a bearish market and fail
+                            # closure on "unknown" (see market_regime_blocks_buy).
+                            regime = market_regime.get("regime", "unknown")
+                            regime_blocks, regime_reason = market_regime_blocks_buy(regime)
+                            if regime_blocks:
+                                is_buy = False
+                                failed_checks = failed_checks + [regime_reason]
+
+                            # Earnings-event filter: suppress BUY within blackout window
+                            earnings_risk = check_earnings_risk(symbol)
+                            if earnings_risk.get("risk"):
+                                is_buy = False
+                                failed_checks = failed_checks + [
+                                    f"Earnings event on {earnings_risk.get('earnings_date', '?')} "
+                                    f"({earnings_risk.get('days_to_earnings', '?')} days away) — gap risk"
+                                ]
+
+                            outobj = {
+                                "symbol":    symbol.replace(".NS", ""),
+                                "yf_symbol": symbol,
+                                "style":     style,
+                                "score":     score,
+                                "signals":   signals,
+                                "buffett_score": buff_score,
+                                "buffett_reasons": buff_reasons,
+                                "graham_score": graham_score,
+                                "graham_reasons": graham_reasons,
+                                "lynch_score": lynch_score,
+                                "lynch_reasons": lynch_reasons,
+                                "templeton_score": templeton_score,
+                                "templeton_reasons": templeton_reasons,
+                                "greenblatt_score": greenblatt_score,
+                                "greenblatt_reasons": greenblatt_reasons,
+                                "marks_score": marks_score,
+                                "marks_reasons": marks_reasons,
+                                "rakesh_score": rakesh_score,
+                                "rakesh_reasons": rakesh_reasons,
+                                "ensemble_score": ensemble_score,
+                                "quality_score": round(quality_score, 1),
+                                "recommendation": "BUY" if is_buy else "WATCHLIST",
+                                "selection_decision": "BUY" if is_buy else "WATCHLIST",
+                                "eligibility_failures": failed_checks,
+                                "sector": sector,
+                                "market_regime": market_regime.get("regime", "unknown"),
+                                **ind
+                            }
+
+                            if roce_metrics:
+                                outobj['roce_score'] = roce_score
+                                outobj['roce_reasons'] = roce_reasons
+                                outobj.update(roce_metrics)
+                            else:
+                                outobj['roce_score'] = 0
+                                outobj['roce_reasons'] = ['unavailable']
+
+                            all_results[style].append(outobj)
 
         final = {}
         for style in styles:
             sorted_stocks = sorted(all_results[style],
-                                   key=lambda x: x["score"], reverse=True)
+                                   key=lambda x: x.get("ensemble_score", x["score"]), reverse=True)
             final[style] = sorted_stocks[:top_n]
 
         self._print_results(final)

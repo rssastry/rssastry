@@ -1,0 +1,30 @@
+[
+  {
+    "short": 15,
+    "long": 50,
+    "vol_thresh": 1.5,
+    "atr_mult": 3,
+    "avg_cagr": 0.009925671370235317
+  },
+  {
+    "short": 15,
+    "long": 100,
+    "vol_thresh": 1.5,
+    "atr_mult": 3,
+    "avg_cagr": 0.009882729690994019
+  },
+  {
+    "short": 21,
+    "long": 50,
+    "vol_thresh": 1.5,
+    "atr_mult": 3,
+    "avg_cagr": 0.007868563853372647
+  },
+  {
+    "short": 21,
+    "long": 100,
+    "vol_thresh": 1.5,
+    "atr_mult": 3,
+    "avg_cagr": 0.006142913795301419
+  }
+]

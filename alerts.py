@@ -66,7 +66,8 @@ Target 1    : Rs.{tp.get('T1',0)}
 Target 2    : Rs.{tp.get('T2',0)}
 Target 3    : Rs.{tp.get('T3',0)}
 Stop Loss   : Rs.{analysis.get('stop_loss',0)}
-R:R Ratio   : {analysis.get('risk_reward_ratio','N/A')}
+R:R to T1    : {analysis.get('risk_reward_t1','N/A')}
+R:R to T2    : {analysis.get('risk_reward_ratio','N/A')}
 Hold        : {analysis.get('hold_duration','N/A')}
 Confidence  : {conf}/100
 Risk Level  : {analysis.get('risk_level','N/A')}
