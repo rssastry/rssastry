@@ -13,7 +13,6 @@ import json
 from datetime import datetime
 import numpy as np
 import pandas as pd
-import yfinance as yf
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
 from ta.volatility import AverageTrueRange
@@ -46,8 +45,8 @@ def compute_indicators(df):
 
 
 def backtest_symbol(symbol, start='2016-01-01', end=None, txn_cost=0.001, slippage=0.0005):
-    ticker = yf.Ticker(symbol)
-    df = ticker.history(start=start, end=end, interval='1d')
+    from price_store import load_adjusted
+    df = load_adjusted(symbol, start=start, end=end)
     if df is None or len(df) < 300:
         return None
 

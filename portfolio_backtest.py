@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from ta.trend import EMAIndicator, MACD
-from data_cache import fetch_history
+from price_store import load_adjusted
 from config import RISK_PER_TRADE, FIXED_TXN_FEE
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
@@ -41,7 +41,7 @@ def fetch_all_data(universe, start, end, short=21, long=50):
     data = {}
     for s in universe:
         try:
-            df = fetch_history(s, start=start, end=end, interval='1d')
+            df = load_adjusted(s, start=start, end=end, interval='1d')
             if df is None or len(df) < 60:
                 continue
             # normalize timezone-aware index to tz-naive for consistent comparisons

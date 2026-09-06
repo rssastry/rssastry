@@ -63,6 +63,17 @@ def job_morning_scan():
     )
 
     try:
+        # Step 0: Refresh the local price files (raw_data/prices/*.csv). Best
+        # effort — a failed provider fetch must not block the scan itself.
+        try:
+            from update_price_files import update_all_price_files
+            res = update_all_price_files()
+            log(f"Price files: {res['updated']} updated, "
+                f"{res['backfilled']} new, {res['merged']} gap-filled, "
+                f"{res['unchanged']} unchanged, {res['failed']} failed")
+        except Exception as e:
+            log(f"Price file update skipped: {e}")
+
         # Step 1: Screen
         screener = StockScreener()
         results  = screener.screen(

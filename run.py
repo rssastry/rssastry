@@ -6,6 +6,7 @@ Usage:
   python run.py portfolio    — show portfolio
   python run.py holdsell     — run hold/sell analysis
   python run.py full         — screen + analyze + alerts (full morning run)
+  python run.py pricefiles   — refresh raw_data/prices CSVs from provider
   python run.py dashboard    — launch Streamlit dashboard
   python run.py scheduler    — start the daily auto-scheduler
 """
@@ -89,6 +90,13 @@ def main():
     elif cmd == "scheduler":
         from schedular import run_scheduler
         run_scheduler()
+
+    elif cmd == "pricefiles":
+        from update_price_files import update_all
+        res = update_all()
+        print(f"Price files: updated={res['updated']} backfilled={res['backfilled']} "
+              f"merged={res['merged']} unchanged={res['unchanged']} "
+              f"failed={res['failed']}")
 
     elif cmd == "test_telegram":
         from alerts import send_telegram

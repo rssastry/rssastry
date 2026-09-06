@@ -23,6 +23,29 @@ five-year price/volume history does not provide five years of historical
 fundamentals; those must be stored as dated snapshots if the fundamental score
 is to be backtested without look-ahead bias.
 
+## Local price files (raw_data/prices)
+
+`raw_data/prices/<SYMBOL>.csv` holds a frozen, per-symbol daily OHLCV history
+(the yfinance raw export header `Date,Adj Close,Close,High,Low,Open,Volume`,
+CRLF, float64 precision). These files are the local, provider-independent
+source for validations and backtests:
+
+```text
+.venv\Scripts\python.exe update_price_files.py            # update the universe
+.venv\Scripts\python.exe update_price_files.py --dry-run  # report only
+.venv\Scripts\python.exe update_price_files.py -s RELIANCE,TCS
+```
+
+- The post-close scan (`schedular.job_morning_scan`) refreshes them as Step 0,
+  on market days only, so each file ends at the latest completed trading session.
+- Existing rows are never re-rendered (byte-preserving merge): only genuinely
+  new dates are appended, duplicates are skipped, and a mid-file gap is
+  back-filled. Symbols without a CSV yet are back-filled with 5 years.
+- A symbol that the data provider currently refuses (throttle / delisted-flag)
+  is reported as failed and retried on the next scan; the scan itself continues.
+- `price_store.fetch_or_fallback` lets validations/backtests consume these CSVs
+  automatically and silently fall back to live yfinance when a file is absent.
+
 Each screener run records the quality fields it received in
 `data_cache/fundamental_snapshots/<SYMBOL>.jsonl`, keyed by capture date. Keep
 these files backed up. They become useful for point-in-time tests after enough

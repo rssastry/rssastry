@@ -133,8 +133,8 @@ def fetch_history(symbol: str, period: str = None, start: str = None, end: str =
                 adj = df['Adj Close'].astype(float)
                 raw_close = df['Close'].replace(0, pd.NA).astype(float)
                 ratio = adj / raw_close
-                ratio.replace([pd.NA, float('inf')], method='ffill', inplace=True)
-                ratio.fillna(1.0, inplace=True)
+                ratio = ratio.replace([pd.NA, np.inf, -np.inf], np.nan)
+                ratio = ratio.ffill().fillna(1.0)
                 # scale OHLC
                 for col in ['Open', 'High', 'Low']:
                     if col in df.columns:

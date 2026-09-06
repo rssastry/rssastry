@@ -308,7 +308,7 @@ class HistoryIndicators:
 def build_regime_series(period=HISTORICAL_DATA_PERIOD):
     """Return {date: regime} for cached ^NSEI data ({} when unavailable)."""
     try:
-        from data_cache import fetch_history
+        from price_store import fetch_or_fallback as fetch_history
         df = fetch_history("^NSEI", period=period, interval="1d")
     except Exception:
         df = None
@@ -445,7 +445,7 @@ def simulate_style(symbols, style, quality_proxy, regime_series,
 
     for sym in symbols:
         try:
-            from data_cache import fetch_history
+            from price_store import fetch_or_fallback as fetch_history
             df = fetch_history(sym, period=period, interval="1d")
         except Exception:
             df = None
@@ -601,7 +601,7 @@ def run_sunpharma_check():
     warnings.filterwarnings("ignore")
     from screener import StockScreener
     try:
-        from data_cache import fetch_history
+        from price_store import fetch_or_fallback as fetch_history
         df = fetch_history("SUNPHARMA.NS", period=HISTORICAL_DATA_PERIOD, interval="1d")
     except Exception:
         df = None
@@ -637,7 +637,7 @@ def print_benchmark(bench):
 
 def nifty_benchmark(period=HISTORICAL_DATA_PERIOD):
     try:
-        from data_cache import fetch_history
+        from price_store import fetch_or_fallback as fetch_history
         df = fetch_history("^NSEI", period=period, interval="1d")
     except Exception:
         df = None
