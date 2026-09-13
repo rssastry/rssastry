@@ -4,6 +4,7 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 from config import CACHE_DIR, CACHE_TTL_HOURS
+from fundamental_snapshots import resolve_provider_ticker
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -108,7 +109,7 @@ def fetch_history(symbol: str, period: str = None, start: str = None, end: str =
                 pass
     # fetch
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(resolve_provider_ticker(symbol))
         if period:
             df = ticker.history(period=period, interval=interval)
         else:

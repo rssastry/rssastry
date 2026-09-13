@@ -7,8 +7,16 @@ Usage:
   python run.py holdsell     — run hold/sell analysis
   python run.py full         — screen + analyze + alerts (full morning run)
   python run.py pricefiles   — refresh raw_data/prices CSVs from provider
+  python run.py snapshot     — capture point-in-time fundamental snapshots
   python run.py dashboard    — launch Streamlit dashboard
   python run.py scheduler    — start the daily auto-scheduler
+  python run.py bible        — close the loop: journal import+resolve+report,
+                               market context snapshot, portfolio discipline,
+                               and the living playbook
+  python run.py journal      — decision journal CLI passthrough
+  python run.py market       — market context snapshot only
+  python run.py discipline   — portfolio discipline report only
+  python run.py playbook     — regenerate the Rules of Engagement document
 """
 
 import sys
@@ -98,13 +106,90 @@ def main():
               f"merged={res['merged']} unchanged={res['unchanged']} "
               f"failed={res['failed']}")
 
+    elif cmd == "snapshot":
+        from screener import NSE_STOCKS
+        from fundamental_snapshots import capture_snapshots, snapshot_coverage
+        res = capture_snapshots(NSE_STOCKS)
+        coverage = snapshot_coverage(NSE_STOCKS)
+        print(f"Fundamental snapshots: requested={res['requested']} "
+              f"captured={res['captured']} failed={res['failed']}")
+        print(f"Coverage: {coverage['symbols_with_snapshots']}/"
+              f"{coverage['symbols_requested']} ({coverage['coverage_pct']}%) | "
+              f"oldest={coverage['oldest_snapshot']} "
+              f"newest={coverage['newest_snapshot']} "
+              f"stale={len(coverage['stale_symbols'])}")
+        if coverage["missing_symbols"]:
+            print("Missing:", ", ".join(coverage["missing_symbols"]))
+
     elif cmd == "test_telegram":
         from alerts import send_telegram
         ok = send_telegram("✅ AI Stock Analyst is connected and working!")
         print("Telegram:", "✅ OK" if ok else "❌ Failed")
 
+    elif cmd in ("journal", "market", "discipline", "playbook", "bible"):
+        _run_bible_command(cmd)
+
     else:
         print(__doc__)
+
+
+def _run_bible_command(cmd: str):
+    """Bible pipeline: journal -> market -> discipline -> playbook."""
+    if cmd == "journal":
+        _bible_journal_default()
+    elif cmd == "market":
+        from market_breadth import build_market_snapshot, _print_snapshot
+        _print_snapshot(build_market_snapshot())
+        print("\nSaved: market_snapshot.json")
+    elif cmd == "discipline":
+        from discipline import build_discipline_report, _print_report
+        _print_report(build_discipline_report())
+        print("\nSaved: portfolio_discipline_report.json")
+    elif cmd == "playbook":
+        from playbook import write_playbook
+        write_playbook()
+        print("Saved: docs/playbook.md + docs/playbook.json")
+    elif cmd == "bible":
+        print("[1/4] Closing the loop: decision journal...")
+        _bible_journal_default()
+        print("\n[2/4] Market context...")
+        from market_breadth import build_market_snapshot, _print_snapshot
+        _print_snapshot(build_market_snapshot())
+        print("\n[3/4] Portfolio discipline...")
+        from discipline import build_discipline_report, _print_report
+        _print_report(build_discipline_report())
+        print("\n[4/4] Living playbook...")
+        from playbook import write_playbook
+        write_playbook()
+        print("\nBible refresh complete.")
+
+
+def _bible_journal_default():
+    """Import today's decisions into the journal, resolve what we can
+    (including hypothetical plans for plan-less candidates), and write the
+    win-rate report consumed by the dashboard."""
+    import json
+    from journal import DecisionJournal
+
+    journal = DecisionJournal()
+    try:
+        for path in ("screener_results.json", "ai_analysis.json"):
+            if not os.path.exists(path):
+                continue
+            res = journal.import_from_file(
+                path, source="ai" if "ai_" in path else "screener")
+            print(f"Journal <- {path}: inserted={res['inserted']} "
+                  f"duplicates={res['duplicates']}")
+        stats = journal.resolve_open(hypothetical=True)
+        resolved = sum(v for k, v in stats.items()
+                       if k not in ("OPEN", "NO_PLAN"))
+        print(f"Resolved {resolved} decision(s): {stats}")
+        report = journal.report(by="style")
+        with open("journal_report.json", "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, default=str)
+        print("Saved: journal_report.json")
+    finally:
+        journal.close()
 
 if __name__ == "__main__":
     main()

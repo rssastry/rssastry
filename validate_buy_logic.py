@@ -22,8 +22,8 @@ Ensemble proxy: the live screener blends fundamental quality scores into
 quality component with a constant (default 20) and requires the technical score
 to clear `BUY_MIN_ENSEMBLE` under that assumption (score >= 63).
 
-The default validation window is five years. Price/volume history is cached by
-data_cache.fetch_history, so reruns reuse the same period-specific parquet file.
+The default validation window is five years from local raw_data/prices CSVs.
+Network fallback is opt-in because a historical report must be reproducible.
 """
 import argparse
 import json
@@ -43,8 +43,11 @@ from config import (CROSSOVER_RECENCY_BARS, FRESH_TRIGGER_BARS,
                     BREAKDOWN_RESOLUTION_LOOKBACK, REVERSAL_LOOKBACK_BARS,
                     REVERSAL_DAY_PCT, REVERSAL_DAY_VOL_MULT, ATR_MULT,
                     MAX_VOLUME_RATIO, BUY_MIN_ENSEMBLE, MIN_DAILY_HISTORY,
-                    HISTORICAL_DATA_PERIOD)
+                    HISTORICAL_DATA_PERIOD, MIN_TECHNICAL_SCORE_FOR_BUY,
+                    MIN_FUNDAMENTAL_QUALITY_FOR_BUY)
 from screener import StockScreener, NSE_STOCKS, market_regime_blocks_buy
+from screener import fundamental_buy_gate
+import strategies
 
 warnings.filterwarnings("ignore")
 
@@ -52,6 +55,15 @@ SLIPPAGE = 0.0005
 TXN_COST = 0.001
 ENTRY_SLOT_PCT = 0.20          # fractional slot per trade for equity sim
 MAX_HOLD_BARS = {"intraday": 3, "swing": 15, "positional": 60}
+MIN_CONFIDENT_TRADES = 30
+
+
+def load_price_history(symbol, period, local_only):
+    """Load reproducible local history unless network fallback is explicit."""
+    from price_store import load_adjusted, fetch_or_fallback
+    if local_only:
+        return load_adjusted(symbol, period=period, interval="1d")
+    return fetch_or_fallback(symbol, period=period, interval="1d")
 
 
 class HistoryIndicators:
@@ -305,11 +317,10 @@ class HistoryIndicators:
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # NIFTY market-regime series (bearish / bullish / unknown)
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-def build_regime_series(period=HISTORICAL_DATA_PERIOD):
+def build_regime_series(period=HISTORICAL_DATA_PERIOD, local_only=True):
     """Return {date: regime} for cached ^NSEI data ({} when unavailable)."""
     try:
-        from price_store import fetch_or_fallback as fetch_history
-        df = fetch_history("^NSEI", period=period, interval="1d")
+        df = load_price_history("^NSEI", period, local_only)
     except Exception:
         df = None
     if df is None or getattr(df, "empty", True) or len(df) < 50:
@@ -334,11 +345,22 @@ def regime_for(regime_series, bar_date):
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Per-style simulation
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+def _snapshot_quality(ind, fundamentals):
+    sector = fundamentals.get("sector", "")
+    buffett, _ = strategies.score_buffett(ind, fundamentals, sector=sector)
+    graham, _ = strategies.score_graham(ind, fundamentals, sector=sector)
+    greenblatt, _ = strategies.score_greenblatt(ind, fundamentals, sector=sector)
+    roce, _, _ = strategies.score_roce_reinvest(ind, fundamentals, sector=sector)
+    return (buffett + graham + greenblatt + roce) / 4.0
+
+
 def _simulate_symbol(hi, solver, style, score_floor, atr_mult, max_hold,
-                     regime_series, apply_regime):
+                     regime_series, apply_regime, snapshots,
+                     require_fundamentals, validation_start=None,
+                     validation_end=None):
     """Simulate ONE symbol for a style with a single open slot.
 
-    Returns (trades, fwd1, fwd5, fwd10, signals, suppressed).
+    Returns (trades, fwd1, fwd5, fwd10, signals, suppressed, fundamental_missing).
     """
     n = hi.n
     open_trade = None
@@ -346,9 +368,15 @@ def _simulate_symbol(hi, solver, style, score_floor, atr_mult, max_hold,
     fwd1, fwd5, fwd10 = [], [], []
     signals = 0
     suppressed = 0
+    fundamental_missing = 0
     sym = hi.df.attrs.get("_symbol", "?")
 
     for t in range(61, n - 1):
+        signal_date = hi.index[t].date()
+        if validation_start and signal_date < validation_start:
+            continue
+        if validation_end and signal_date > validation_end:
+            break
         # â”€â”€ manage open position exit first (uses bar t) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if open_trade is not None:
             ot = open_trade
@@ -389,6 +417,28 @@ def _simulate_symbol(hi, solver, style, score_floor, atr_mult, max_hold,
         score, _ = solver.score_stock(ind, style)
         if score < score_floor:
             continue
+        fundamentals = None
+        if require_fundamentals:
+            from fundamental_snapshots import (load_snapshot_as_of,
+                                               apply_price_valuation)
+            fundamentals = load_snapshot_as_of(sym, hi.index[t].date())
+            if fundamentals is None:
+                fundamental_missing += 1
+                continue
+            # Statement-derived annual snapshots carry EPS/BVPS but no market
+            # price; derive the PIT trailing P/E and P/B from the signal bar's
+            # close so valuation is point-in-time too (never overrides info PE).
+            apply_price_valuation(fundamentals, float(hi.close.iloc[t]))
+            quality_score = _snapshot_quality(ind, fundamentals)
+            if quality_score < MIN_FUNDAMENTAL_QUALITY_FOR_BUY:
+                fundamental_missing += 1
+                continue
+            fundamental_ok, _ = fundamental_buy_gate(
+                fundamentals, quality_score, sector=fundamentals.get("sector")
+            )
+            if not fundamental_ok:
+                fundamental_missing += 1
+                continue
         ok, _ = solver.evaluate_buy_eligibility(ind, style)
         if not ok:
             continue
@@ -422,10 +472,12 @@ def _simulate_symbol(hi, solver, style, score_floor, atr_mult, max_hold,
                        "exit_date": str(hi.index[n - 1].date()),
                        "ret": round(ret, 4), "bars": n - 1 - ot["entry_ix"]})
 
-    return trades, fwd1, fwd5, fwd10, signals, suppressed
+    return trades, fwd1, fwd5, fwd10, signals, suppressed, fundamental_missing
 
 def simulate_style(symbols, style, quality_proxy, regime_series,
-                   apply_regime=True, period=HISTORICAL_DATA_PERIOD):
+                   apply_regime=True, period=HISTORICAL_DATA_PERIOD,
+                   require_fundamentals=True, local_only=True,
+                   validation_start=None, validation_end=None):
     """Run the buy gate over the history for every symbol, per style.
 
     Every symbol is simulated independently (one open slot at a time); all
@@ -433,7 +485,10 @@ def simulate_style(symbols, style, quality_proxy, regime_series,
     realistic "enter every signal with equal fractional sizing" model.
     """
     solver = StockScreener()
-    score_floor = int(round((BUY_MIN_ENSEMBLE - 0.30 * quality_proxy) / 0.70))
+    score_floor = max(
+        int(round((BUY_MIN_ENSEMBLE - 0.30 * quality_proxy) / 0.70)),
+        int(MIN_TECHNICAL_SCORE_FOR_BUY.get(style, 65)),
+    )
     atr_mult = ATR_MULT.get(style, 3.0)
     max_hold = MAX_HOLD_BARS.get(style, 15)
 
@@ -441,12 +496,12 @@ def simulate_style(symbols, style, quality_proxy, regime_series,
     fwd1, fwd5, fwd10 = [], [], []
     total_signals = 0
     total_suppressed = 0
+    total_fundamental_missing = 0
     ok_syms = 0
 
     for sym in symbols:
         try:
-            from price_store import fetch_or_fallback as fetch_history
-            df = fetch_history(sym, period=period, interval="1d")
+            df = load_price_history(sym, period, local_only)
         except Exception:
             df = None
         if df is None or getattr(df, "empty", True) or len(df) < MIN_DAILY_HISTORY:
@@ -457,9 +512,12 @@ def simulate_style(symbols, style, quality_proxy, regime_series,
             hi = HistoryIndicators(df)
         except Exception:
             continue
-        trades, f1, f5, f10, sig, supp = _simulate_symbol(
+        from fundamental_snapshots import load_snapshots
+        snapshots = load_snapshots(sym)
+        trades, f1, f5, f10, sig, supp, fund_missing = _simulate_symbol(
             hi, solver, style, score_floor, atr_mult, max_hold,
-            regime_series, apply_regime)
+            regime_series, apply_regime, snapshots, require_fundamentals,
+            validation_start, validation_end)
         ok_syms += 1
         all_trades.extend(trades)
         fwd1.extend(f1)
@@ -467,6 +525,7 @@ def simulate_style(symbols, style, quality_proxy, regime_series,
         fwd10.extend(f10)
         total_signals += sig
         total_suppressed += supp
+        total_fundamental_missing += fund_missing
 
     # sort by trade exit date for a realistic chronological equity curve
     all_trades.sort(key=lambda x: x["exit_date"])
@@ -480,6 +539,8 @@ def simulate_style(symbols, style, quality_proxy, regime_series,
         "style": style,
         "signals": total_signals,
         "suppressed_by_regime": total_suppressed,
+        "suppressed_by_missing_or_weak_fundamentals": total_fundamental_missing,
+        "fundamentals_required": require_fundamentals,
         "symbols_tested": ok_syms,
         "trades": all_trades,
         "equity_curve": equity_curve,
@@ -491,8 +552,14 @@ def metrics(result, years):
     trades = result["trades"]
     out = {"style": result["style"], "signals": result["signals"],
            "suppressed_by_regime": result["suppressed_by_regime"],
+           "suppressed_by_missing_or_weak_fundamentals": result.get(
+               "suppressed_by_missing_or_weak_fundamentals", 0),
            "symbols_tested": result.get("symbols_tested", 0),
            "trades": len(trades)}
+    out["confidence"] = (
+        "sufficient_sample" if len(trades) >= MIN_CONFIDENT_TRADES
+        else "insufficient_sample"
+    )
     if trades:
         rets = [t["ret"] for t in trades]
         wins = [r for r in rets if r > 0]
@@ -537,6 +604,14 @@ def main():
                     help="yfinance history period used for stocks and NIFTY (default: 5y)")
     ap.add_argument("--no-regime", action="store_true",
                     help="disable the market-regime filter")
+    ap.add_argument("--technical-only", action="store_true",
+                    help="allow the old price-only replay; not suitable for BUY approval")
+    ap.add_argument("--allow-network", action="store_true",
+                    help="allow network fallback when a local CSV is unavailable")
+    ap.add_argument("--validation-start", default=None,
+                    help="first signal date for held-out validation (YYYY-MM-DD)")
+    ap.add_argument("--validation-end", default=None,
+                    help="last signal date for held-out validation (YYYY-MM-DD)")
     ap.add_argument("--sunpharma-check", action="store_true",
                     help="run the SUNPHARMA 2026-09-02 regression assertion")
     ap.add_argument("--json", type=str, default="validation_report.json")
@@ -554,7 +629,11 @@ def main():
     if args.sunpharma_check:
         run_sunpharma_check()
 
-    regime_series = {} if args.no_regime else build_regime_series(args.period)
+    validation_start = pd.Timestamp(args.validation_start).date() if args.validation_start else None
+    validation_end = pd.Timestamp(args.validation_end).date() if args.validation_end else None
+    local_only = not args.allow_network
+    regime_series = {} if args.no_regime else build_regime_series(
+        args.period, local_only=local_only)
     if not args.no_regime and not regime_series:
         print("  ! ^NSEI regime data unavailable - will treat all signals "
               "as unknown/fail-closed.\n")
@@ -563,12 +642,23 @@ def main():
               "universe_size": len(universe), "styles": styles,
               "quality_proxy": args.quality, "regime_filter": not args.no_regime,
               "history_period": args.period,
+              "fundamentals_required": not args.technical_only,
+              "price_data_source": "local_csv" if local_only else "local_csv_with_network_fallback",
+              "validation_start": args.validation_start,
+              "validation_end": args.validation_end,
+              "fundamental_snapshot_coverage": __import__(
+                  "fundamental_snapshots", fromlist=["snapshot_coverage"]
+              ).snapshot_coverage(universe),
               "by_style": {}}
 
     for style in styles:
         print(f"\n  Simulating {style.upper()} ...")
         res = simulate_style(universe, style, args.quality, regime_series,
-                             apply_regime=not args.no_regime, period=args.period)
+                             apply_regime=not args.no_regime, period=args.period,
+                             require_fundamentals=not args.technical_only,
+                             local_only=local_only,
+                             validation_start=validation_start,
+                             validation_end=validation_end)
         years = 0.0
         if res.get("trades"):
             dates = [pd.to_datetime(t["entry_date"]) for t in res["trades"]
@@ -637,8 +727,7 @@ def print_benchmark(bench):
 
 def nifty_benchmark(period=HISTORICAL_DATA_PERIOD):
     try:
-        from price_store import fetch_or_fallback as fetch_history
-        df = fetch_history("^NSEI", period=period, interval="1d")
+        df = load_price_history("^NSEI", period, local_only=True)
     except Exception:
         df = None
     if df is None or getattr(df, "empty", True) or len(df) < 200:

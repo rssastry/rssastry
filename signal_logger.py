@@ -1,6 +1,6 @@
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 LOG_FILE = "signals_log.csv"
 
@@ -21,7 +21,7 @@ def log_signal(symbol: str, price: float, atr: float = None, qty: int = 0,
     """Append a signal record to CSV for later ML training or auditing."""
     _ensure_header()
     row = {
-        "ts": datetime.utcnow().isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),
         "symbol": symbol,
         "source": source,
         "price": price,

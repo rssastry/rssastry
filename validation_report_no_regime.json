@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-09-06 20:39:29",
+  "universe_size": 40,
+  "styles": [
+    "intraday",
+    "swing",
+    "positional"
+  ],
+  "quality_proxy": 20.0,
+  "regime_filter": false,
+  "history_period": "5y",
+  "by_style": {
+    "intraday": {
+      "style": "intraday",
+      "signals": 18,
+      "suppressed_by_regime": 0,
+      "symbols_tested": 39,
+      "trades": 18,
+      "win_rate": 0.611,
+      "avg_return_pct": -0.13,
+      "median_return_pct": 0.7,
+      "best_pct": 2.76,
+      "worst_pct": -9.14,
+      "avg_hold_bars": 2.8,
+      "profit_factor": 0.88,
+      "fwd_1d_win_pct": 63.2,
+      "fwd_5d_win_pct": 57.9,
+      "fwd_10d_win_pct": 68.4,
+      "total_return_pct": -0.49,
+      "cagr": -0.0013,
+      "max_drawdown_pct": -2.53
+    },
+    "swing": {
+      "style": "swing",
+      "signals": 8,
+      "suppressed_by_regime": 0,
+      "symbols_tested": 39,
+      "trades": 8,
+      "win_rate": 0.625,
+      "avg_return_pct": 4.8,
+      "median_return_pct": 4.85,
+      "best_pct": 14.71,
+      "worst_pct": -3.94,
+      "avg_hold_bars": 13.0,
+      "profit_factor": 6.28,
+      "fwd_1d_win_pct": 77.8,
+      "fwd_5d_win_pct": 44.4,
+      "fwd_10d_win_pct": 77.8,
+      "total_return_pct": 7.87,
+      "cagr": 0.0287,
+      "max_drawdown_pct": -1.35
+    },
+    "positional": {
+      "style": "positional",
+      "signals": 15,
+      "suppressed_by_regime": 0,
+      "symbols_tested": 39,
+      "trades": 15,
+      "win_rate": 0.333,
+      "avg_return_pct": 1.79,
+      "median_return_pct": -1.36,
+      "best_pct": 15.65,
+      "worst_pct": -4.01,
+      "avg_hold_bars": 23.5,
+      "profit_factor": 2.03,
+      "fwd_1d_win_pct": 64.7,
+      "fwd_5d_win_pct": 47.1,
+      "fwd_10d_win_pct": 58.8,
+      "total_return_pct": 5.35,
+      "cagr": 0.0161,
+      "max_drawdown_pct": -2.97
+    }
+  },
+  "nifty_benchmark": {
+    "available": true,
+    "total_return_pct": 41.3,
+    "cagr": 0.077,
+    "max_drawdown_pct": -16.47,
+    "window_years": 4.66
+  }
+}

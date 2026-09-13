@@ -12,6 +12,7 @@ import plotly.express as px
 from datetime import datetime
 import yfinance as yf
 import warnings
+from decision_quality import build_decision_summary
 warnings.filterwarnings("ignore")
 
 st.set_page_config(
@@ -282,7 +283,9 @@ def load_json(path):
 
 def get_live_price(symbol):
     try:
-        sym = symbol if ".NS" in symbol else symbol + ".NS"
+        from fundamental_snapshots import resolve_provider_ticker
+        local_sym = symbol if ".NS" in symbol else symbol + ".NS"
+        sym = resolve_provider_ticker(local_sym)
         df  = yf.Ticker(sym).history(period="1d", interval="1m")
         return round(df["Close"].iloc[-1], 2) if not df.empty else None
     except Exception:
@@ -377,9 +380,86 @@ def build_buy_order(symbol, analysis_price, atr, cash, tp=None, stop_rc=None,
     }
 
 
+def validate_manual_analysis_buy(indicators, symbol, style, ai_recommendation):
+    """Re-run the deterministic BUY approval before manual analysis can add."""
+    from config import (MIN_TECHNICAL_SCORE_FOR_BUY,
+                        ALLOW_DAILY_BAR_INTRADAY_BUY)
+    from screener import (StockScreener, check_market_regime,
+                          fundamental_buy_gate, market_regime_blocks_buy)
+    from fundamental_snapshots import resolve_provider_ticker
+    import strategies
+
+    failures = []
+    screener = StockScreener()
+    if ai_recommendation != "BUY":
+        failures.append(f"AI recommendation is {ai_recommendation or 'unknown'}, not BUY")
+
+    try:
+        technical_score, _ = screener.score_stock(indicators, style)
+        if technical_score < MIN_TECHNICAL_SCORE_FOR_BUY.get(style, 65):
+            failures.append(
+                f"Technical score {technical_score} below "
+                f"{MIN_TECHNICAL_SCORE_FOR_BUY.get(style, 65)} BUY floor"
+            )
+    except Exception as exc:
+        failures.append(f"Technical BUY validation failed: {exc}")
+
+    try:
+        provider_symbol = resolve_provider_ticker(symbol)
+        fundamentals = yf.Ticker(provider_symbol).info or {}
+        sector = fundamentals.get("sector") or ""
+        scores = [
+            strategies.score_buffett(indicators, fundamentals, sector=sector)[0],
+            strategies.score_graham(indicators, fundamentals, sector=sector)[0],
+            strategies.score_greenblatt(indicators, fundamentals, sector=sector)[0],
+            strategies.score_roce_reinvest(
+                indicators, {**fundamentals, "symbol": symbol}, sector=sector
+            )[0],
+        ]
+        quality_score = sum(scores) / len(scores)
+        fundamental_ok, fundamental_failures = fundamental_buy_gate(
+            fundamentals, quality_score, sector=sector
+        )
+        if not fundamental_ok:
+            failures.extend(fundamental_failures)
+    except Exception as exc:
+        failures.append(f"Fundamental BUY validation failed: {exc}")
+
+    eligibility_ok, eligibility_failures = screener.evaluate_buy_eligibility(
+        indicators, style
+    )
+    if not eligibility_ok:
+        failures.extend(eligibility_failures)
+
+    if style == "intraday" and not ALLOW_DAILY_BAR_INTRADAY_BUY:
+        failures.append(
+            "Intraday BUY requires intraday candles; daily data is WATCHLIST-only"
+        )
+
+    regime = check_market_regime().get("regime", "unknown")
+    blocked, regime_reason = market_regime_blocks_buy(regime)
+    if blocked:
+        failures.append(regime_reason)
+
+    try:
+        from screener import check_earnings_risk
+        earnings = check_earnings_risk(symbol)
+        if earnings.get("risk"):
+            failures.append(
+                f"Earnings event on {earnings.get('earnings_date', '?')} "
+                f"({earnings.get('days_to_earnings', '?')} days away)"
+            )
+    except Exception:
+        pass
+
+    return not failures, list(dict.fromkeys(failures))
+
+
 def candlestick_chart(symbol, period="30d"):
     try:
-        sym = symbol if ".NS" in symbol else symbol + ".NS"
+        from fundamental_snapshots import resolve_provider_ticker
+        local_sym = symbol if ".NS" in symbol else symbol + ".NS"
+        sym = resolve_provider_ticker(local_sym)
         df  = yf.Ticker(sym).history(period=period, interval="1d")
         fig = go.Figure()
         fig.add_trace(go.Candlestick(
@@ -562,6 +642,8 @@ with st.sidebar:
         "tuning_walkforward.json": "⚙️  Tuning Results",
         "buy_suggestions.json": "🛒  Buy Suggestions",
         "screener_results.json": "🔎  Screener Results",
+        "journal_report.json": "📖  Decision Journal",
+        "market_snapshot.json": "🌐  Market & Discipline",
     }
     for f, label in reports.items():
         if os.path.exists(f) and label not in page_items:
@@ -946,6 +1028,17 @@ elif "Picks" in page:
 
                     st.markdown("<br>", unsafe_allow_html=True)
 
+                    decision = build_decision_summary(p)
+                    q1, q2, q3, q4 = st.columns(4)
+                    q1.metric("Effective decision", decision["recommendation"])
+                    q2.metric("Evidence conviction", f'{decision["conviction"]}/100' if decision["conviction"] is not None else "N/A")
+                    q3.metric("Data freshness", decision["freshness"]["label"])
+                    q4.metric("Market regime", decision["market_regime"])
+                    if decision["blockers"]:
+                        st.warning("Gate review: " + "; ".join(decision["blockers"][:3]))
+                    else:
+                        st.success("Gate review: no recorded blockers")
+
                     # ── Conditions / gate review (live, re-validated) ────────
                     bb = float(ind.get("bb_pct") or 0)
                     rsi_v = float(ind.get("rsi") or 0)
@@ -1131,13 +1224,14 @@ elif "Portfolio" in page:
             else:
                 try:
                     from indicators import IndicatorEngine
-                    price_val = bp if bp and bp > 0 else get_live_price(sym) or 0
-                    eng = IndicatorEngine(sym + ".NS")
+                    sym_clean = sym.strip().upper().removesuffix(".NS")
+                    price_val = bp if bp and bp > 0 else get_live_price(sym_clean) or 0
+                    eng = IndicatorEngine(sym_clean + ".NS")
                     ok = eng.fetch()
                     ind_vals = eng.compute_all() if ok else {}
                     atr_val = ind_vals.get('atr') if ind_vals else None
                     cash = st.session_state.get('cash_per_trade', 100000)
-                    order = build_buy_order(sym.upper(), price_val, atr_val, cash,
+                    order = build_buy_order(sym_clean, price_val, atr_val, cash,
                                             tp={'T1': tgt, 'T2': tgt}, stop_rc=sl, style=sty)
                     live_txt = f" • live ₹{order.get('live_price')}" if order.get('live_price') else ''
                     st.info(f"Suggested: qty {order.get('qty',1)} • stop ₹{order.get('stop', sl)} • R:R {order.get('rr','?')}{live_txt}")
@@ -1149,10 +1243,11 @@ elif "Portfolio" in page:
             if sym:
                 from portfolio import add_holding, last_add_failures
                 cash = st.session_state.get('cash_per_trade', 100000)
+                sym_clean = sym.strip().upper().removesuffix(".NS")
                 # Never record junk levels: auto-fill target/stop from the live
                 # ATR when the caller left them at 0 (HINDCOPPER holding was
                 # stored with target/stop = 1.0, making the stop meaningless).
-                price_use = bp if bp and bp > 0 else get_live_price(sym) or 0
+                price_use = bp if bp and bp > 0 else get_live_price(sym_clean) or 0
                 if price_use <= 0:
                     st.error("❌ No usable price — enter a Buy Price or a live quote is required.")
                 else:
@@ -1162,11 +1257,11 @@ elif "Portfolio" in page:
                     if use_tgt <= 0 or use_sl <= 0:
                         try:
                             from indicators import IndicatorEngine
-                            _eng = IndicatorEngine(sym + ".NS")
+                            _eng = IndicatorEngine(sym_clean + ".NS")
                             _atr = None
                             if _eng.fetch():
                                 _atr = _eng.compute_all().get('atr')
-                            _order = build_buy_order(sym.upper(), price_use, _atr, cash,
+                            _order = build_buy_order(sym_clean, price_use, _atr, cash,
                                                      tp={}, stop_rc=None, style=sty)
                             if not use_tgt:
                                 use_tgt = _order.get('target') or round(price_use * 1.05, 2)
@@ -1177,13 +1272,13 @@ elif "Portfolio" in page:
                                 use_tgt = round(price_use * 1.05, 2)
                             if not use_sl:
                                 use_sl = round(price_use * 0.95, 2)
-                    ok = add_holding(sym.upper(), price_use, use_qty, str(bd), use_tgt, use_sl, sty, cash=cash)
+                    ok = add_holding(sym_clean, price_use, use_qty, str(bd), use_tgt, use_sl, sty, cash=cash)
                     if ok:
-                        st.success(f"✅ Added {sym.upper()} (target ₹{use_tgt}, stop ₹{use_sl})")
+                        st.success(f"✅ Added {sym_clean} (target ₹{use_tgt}, stop ₹{use_sl})")
                         st.rerun()
                     else:
                         reasons = "  \n".join(f"- {r}" for r in last_add_failures) or "Unknown validation error"
-                        st.error(f"❌ Could not add {sym.upper()}:\n{reasons}")
+                        st.error(f"❌ Could not add {sym_clean}:\n{reasons}")
             else:
                 st.warning("Enter a symbol.")
 
@@ -1399,6 +1494,11 @@ elif "Analyze" in page:
                     rec  = result.get("recommendation", "")
                     conf = result.get("confidence_score", 0)
                     risk = result.get("risk_level", "Medium")
+                    gate_ok, gate_failures = validate_manual_analysis_buy(
+                        ind, sym_clean, style, rec
+                    )
+                    result["deterministic_buy_gate"] = gate_ok
+                    result["eligibility_failures"] = gate_failures
 
                     # Header
                     st.markdown(
@@ -1551,7 +1651,13 @@ elif "Analyze" in page:
                             pass
                         if not order.get('ok'):
                             st.warning(f"⚠️ Add blocked: {order.get('reason')}")
-                        if st.button("➕ Add to Portfolio", key='analyze_add', disabled=not order.get('ok')):
+                        can_add = order.get("ok") and gate_ok
+                        if not gate_ok:
+                            st.warning(
+                                "⚠️ Portfolio add blocked until the deterministic "
+                                "BUY gate passes. AI analysis is advisory only."
+                            )
+                        if st.button("➕ Add to Portfolio", key='analyze_add', disabled=not can_add):
                             from datetime import date
                             if add_holding and order.get('ok'):
                                 from portfolio import last_add_failures
@@ -1570,7 +1676,8 @@ elif "Analyze" in page:
                                     reasons = "  \n".join(f"- {r}" for r in last_add_failures) or "Unknown validation error"
                                     st.error(f"❌ Could not add {sym_clean}:\n{reasons}")
                             else:
-                                st.error(f"❌ Cannot add {sym_clean}: {order.get('reason') or 'invalid order'}")
+                                reason = order.get("reason") or "; ".join(gate_failures)
+                                st.error(f"❌ Cannot add {sym_clean}: {reason or 'invalid order'}")
                 else:
                     st.error("Analysis failed. Check your API key in .env")
             except Exception as e:
@@ -1775,6 +1882,144 @@ elif "Screener Results" in page:
                                         else:
                                             reasons = "  \n".join(f"- {r}" for r in last_add_failures) or "Unknown validation error"
                                             st.error(f"❌ Could not add {s.get('symbol')}:\n{reasons}")
+
+
+# ─────────────────────────────────────────────
+# PAGE: DECISION JOURNAL
+# ─────────────────────────────────────────────
+elif "Decision Journal" in page:
+    st.markdown('<div class="page-title">📖 Decision Journal</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="page-sub">What was decided, what happened, and '
+                'what that calibrates for tomorrow. Run <code>run.py bible</code> '
+                'after each scan to close the loop.</div>', unsafe_allow_html=True)
+
+    data = load_json("journal_report.json")
+    if not data:
+        st.info("No journal report yet. Run `python run.py bible` (or "
+                "`python journal.py import && journal.py resolve && "
+                "journal.py report`) to generate one.")
+        st.stop()
+
+    overall = data.get("overall") or {}
+    open_n = data.get("open", 0)
+    cols = st.columns(4)
+    cols[0].metric("Decisions logged", data.get("total_decisions", 0))
+    cols[1].metric("Resolved", data.get("resolved", 0))
+    cols[2].metric("Win rate", f"{overall.get('win_rate', 0) or 0:.1%}")
+    cols[3].metric("Median return", f"{overall.get('median_return_pct', 0) or 0}%")
+    st.caption(f"Style win-rates use resolved decisions only; OPEN ({open_n}) "
+               f"accrue forward as data lands. Dedupe: {data.get('dedupe_key', '')}")
+
+    st.markdown('<div class="section-header">Win rate by style</div>',
+                unsafe_allow_html=True)
+    grouped = data.get("grouped", {})
+    if grouped:
+        rows = [{"Group": k, "n": v["decisions"], "Win": v["win_rate"],
+                 "Stop": v["stop_rate"], "Faded": v["fade_rate"],
+                 "AvgReturn%": v["avg_return_pct"],
+                 "MedianReturn%": v["median_return_pct"]}
+                for k, v in sorted(grouped.items())]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No resolved decisions yet - they accumulate as each day's "
+                   "price history completes.")
+
+    st.markdown('<div class="section-header">Truth & calibration notes</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        "- **OPEN** stays OPEN until enough forward bars exist - recency never "
+        "fakes an outcome.\n"
+        "- **EXPIRED** counts as a non-win: ran past style max-hold without "
+        "hitting a target.\n"
+        "- `journal.py report --by band` groups by confidence band - if higher "
+        "AI confidence does not win more, the calibration loop says something."
+    )
+
+
+# ─────────────────────────────────────────────
+# PAGE: MARKET & DISCIPLINE
+# ─────────────────────────────────────────────
+elif "Market & Discipline" in page:
+    st.markdown('<div class="page-title">🌐 Market Context & Portfolio Discipline</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="page-sub">The tape beyond NIFTY-vs-EMA50: breadth, '
+                'participation, volatility regime, sector rotation - plus the '
+                'portfolio report card against the market.</div>',
+                unsafe_allow_html=True)
+
+    snapshot = load_json("market_snapshot.json")
+    if snapshot:
+        breadth = snapshot.get("breadth", {})
+        vol = snapshot.get("volatility_regime", {})
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Breadth > EMA21",
+                  f"{breadth.get('breadth_pct_above_ema21', '-')}%")
+        c2.metric("Breadth > EMA50",
+                  f"{breadth.get('breadth_pct_above_ema50', '-')}%")
+        c3.metric("Advance ratio (5d)", breadth.get("advance_ratio_5d", "-"))
+        vol_label = str(vol.get("regime", "unknown")).upper()
+        c4.metric("NIFTY vol regime", vol_label,
+                  help=f"20d vol {vol.get('vol_20d')} @ "
+                       f"p{vol.get('percentile', 0) * 100:.0f}")
+
+        st.markdown('<div class="section-header">Sector breadth (above EMA50)</div>',
+                    unsafe_allow_html=True)
+        sectors = snapshot.get("sector_breadth", {})
+        if sectors:
+            import pandas as _pd
+            s_df = _pd.DataFrame(
+                [{"Sector": k, "Breadth %": v["breadth_pct_above_ema50"],
+                  "Symbols": v["scanned"]}
+                 for k, v in sorted(sectors.items(),
+                                    key=lambda kv: -kv[1]["breadth_pct_above_ema50"])])
+            st.dataframe(s_df, use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="section-header">Relative movers (5d)</div>',
+                    unsafe_allow_html=True)
+        movers = snapshot.get("relative_movers", {})
+        leaders = movers.get("leaders", [])[:8]
+        if leaders:
+            l_df = _pd.DataFrame(
+                [{"Symbol": r["symbol"], "5d%": r["ret_5d_pct"],
+                  "AboveEMA21": r["above_ema21"],
+                  "From52wH%": r["pct_from_52w_high"]} for r in leaders])
+            st.dataframe(l_df, use_container_width=True, hide_index=True)
+        st.caption(f"Snapshot covers {breadth.get('universe_scanned', 0)} symbols "
+                   f"from frozen local CSVs. Refresh: `python run.py market`.")
+    else:
+        st.info("No market snapshot yet. Run `python run.py market`.")
+
+    st.markdown('<div class="section-header" style="margin-top:24px">'
+                'Portfolio discipline</div>', unsafe_allow_html=True)
+    discipline = load_json("portfolio_discipline_report.json")
+    if discipline:
+        summary = discipline.get("summary", {})
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Open positions", summary.get("open_positions", 0))
+        d2.metric("OVERDUE", summary.get("overdue_positions", 0))
+        d3.metric("Concentration HHI", summary.get("hhi", "-"))
+        d4.metric("Net realized P&L",
+                  f"{summary.get('net_realized_pnl_pct', 0):+.2f}%")
+        import pandas as _pd2
+        aging = discipline.get("position_aging", [])
+        if aging:
+            a_df = _pd2.DataFrame(
+                [{"Symbol": r["symbol"], "Style": r["style"],
+                  "OpenBars": r["open_bars"], "MaxHold": r["max_hold_bars"],
+                  "OVERDUE": "YES" if r["overdue"] else ""} for r in aging])
+            st.dataframe(a_df, use_container_width=True, hide_index=True)
+        ledger = discipline.get("realized_ledger", [])
+        if ledger:
+            st.markdown("**Realized edge vs NIFTY (closed trades)**")
+            led_df = _pd2.DataFrame(
+                [{"Symbol": r["symbol"], "Realized%": r["realized_pnl_pct"],
+                  "NIFTY%": r["nifty_buyhold_pct"], "Alpha%": r["alpha_pct"]}
+                 for r in ledger])
+            st.dataframe(led_df, use_container_width=True, hide_index=True)
+        st.caption("Refresh: `python run.py discipline`.")
+    else:
+        st.info("No discipline report yet. Run `python run.py discipline`.")
 
 
 # ─────────────────────────────────────────────

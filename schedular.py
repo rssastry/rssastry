@@ -38,7 +38,9 @@ def get_live_price(symbol: str) -> float:
     """Get the current intraday price using 1-minute bars."""
     try:
         import yfinance as yf
-        sym = symbol if ".NS" in symbol else symbol + ".NS"
+        from fundamental_snapshots import resolve_provider_ticker
+        local_sym = symbol if ".NS" in symbol else symbol + ".NS"
+        sym = resolve_provider_ticker(local_sym)
         df = yf.Ticker(sym).history(period="1d", interval="1m")
         if df is not None and not df.empty:
             return round(float(df["Close"].iloc[-1]), 2)
@@ -74,6 +76,17 @@ def job_morning_scan():
         except Exception as e:
             log(f"Price file update skipped: {e}")
 
+        # Capture fundamentals after the close so the snapshot date matches
+        # the completed price bar used by the screener and future validation.
+        try:
+            from fundamental_snapshots import capture_snapshots
+            from screener import NSE_STOCKS
+            snapshot_res = capture_snapshots(NSE_STOCKS)
+            log(f"Fundamental snapshots: {snapshot_res['captured']} captured, "
+                f"{snapshot_res['failed']} failed")
+        except Exception as e:
+            log(f"Fundamental snapshot capture skipped: {e}")
+
         # Step 1: Screen
         screener = StockScreener()
         results  = screener.screen(
@@ -85,6 +98,23 @@ def job_morning_scan():
         # Step 2: AI analyze
         analyst  = AIAnalyst()
         analysis = analyst.analyze_top_picks(results, delay_seconds=3)
+
+        # Step 2b: Close the loop - journal today's decisions, resolve what
+        # has matured, refresh market context and discipline reports (best
+        # effort; the scan itself must never depend on these).
+        try:
+            from run import _bible_journal_default
+            _bible_journal_default()
+        except Exception as e:
+            log(f"Decision journal step skipped: {e}")
+        try:
+            from market_breadth import build_market_snapshot
+            build_market_snapshot()
+            from discipline import build_discipline_report
+            build_discipline_report()
+            log("Market context + discipline reports refreshed.")
+        except Exception as e:
+            log(f"Context refresh skipped: {e}")
 
         # Step 3: Send morning summary
         send_morning_summary(analysis)

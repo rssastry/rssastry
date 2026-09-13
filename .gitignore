@@ -26,6 +26,12 @@ data_cache/
 *.log
 signals_log.csv
 
+# ── "Bible" derived artifacts (regenerable via run.py bible) ────
+journal_report.json
+market_snapshot.json
+portfolio_discipline_report.json
+docs/playbook.json
+
 # ── Packages / binaries ────────────────────────────────────────
 *.whl
 *.zip

@@ -14,7 +14,9 @@ from ta.volatility import BollingerBands, AverageTrueRange
 import warnings
 import json
 import os
+from collections import Counter
 import strategies
+from fundamental_snapshots import resolve_provider_ticker
 
 warnings.filterwarnings("ignore")
 
@@ -32,7 +34,7 @@ NSE_STOCKS = [
     "TECHM.NS", "INDUSINDBK.NS", "BAJAJFINSV.NS", "GRASIM.NS", "HINDALCO.NS",
     "CIPLA.NS", "DRREDDY.NS", "BRITANNIA.NS", "EICHERMOT.NS", "BPCL.NS",
     "TATACONSUM.NS", "APOLLOHOSP.NS", "DIVISLAB.NS", "HEROMOTOCO.NS", "SBILIFE.NS",
-    "HDFCLIFE.NS", "BAJAJ-AUTO.NS", "SHRIRAMFIN.NS", "M&M.NS", "LTIM.NS",
+    "HDFCLIFE.NS", "BAJAJ-AUTO.NS", "SHRIRAMFIN.NS", "M&M.NS",
 
     # NIFTY NEXT 50 / MidCap
     "ADANIGREEN.NS", "ADANITRANS.NS", "AMBUJACEM.NS", "AUROPHARMA.NS", "BANDHANBNK.NS",
@@ -61,6 +63,25 @@ NSE_STOCKS = [
     "NBCC.NS", "NLCINDIA.NS", "OLECTRA.NS",
     "PVRINOX.NS", "RAMCOCEM.NS", "RATNAMANI.NS",
     "NUVOCO.NS", "RAIN.NS",
+
+    # NIFTY MIDCAP 100 constituents not already above (~50-symbol expansion,
+    # 2026-09-09 NSE index components) — broadens the candidate pool and the
+    # fundamental validation sample with liquid, well-covered names.
+    "360ONE.NS", "APLAPOLLO.NS", "ASHOKLEY.NS", "ATGL.NS",
+    "BANKINDIA.NS", "BDL.NS", "BHARATFORG.NS", "BLUESTARCO.NS",
+    "BSE.NS", "COCHINSHIP.NS", "COFORGE.NS", "COROMANDEL.NS",
+    "DIXON.NS", "EXIDEIND.NS", "FORTIS.NS", "GMRAIRPORT.NS",
+    "GODFRYPHLP.NS", "GROWW.NS", "GVT&D.NS", "HUDCO.NS",
+    "ICICIAMC.NS", "ICICIGI.NS", "IDEA.NS", "INDIANB.NS",
+    "IREDA.NS", "KALYANKJIL.NS", "KEI.NS", "KPITTECH.NS",
+    "LENSKART.NS", "LGEINDIA.NS", "LTF.NS", "M&MFIN.NS",
+    "MANKIND.NS", "MFSL.NS", "MOTILALOFS.NS", "NATIONALUM.NS",
+    "NHPC.NS", "OIL.NS", "PATANJALI.NS", "PAYTM.NS",
+    "PHOENIXLTD.NS", "POLICYBZR.NS", "POWERINDIA.NS", "PREMIERENE.NS",
+    "PRESTIGE.NS", "RADICO.NS", "RVNL.NS", "SBICARD.NS",
+    "SUPREMEIND.NS", "SUZLON.NS", "SWIGGY.NS", "TATACOMM.NS",
+    "TATAELXSI.NS", "TATAINVEST.NS", "TIINDIA.NS", "VMM.NS",
+    "WAAREEENER.NS", "YESBANK.NS",
 ]
 
 # Deduplicate while preserving order
@@ -74,7 +95,13 @@ from config import (CROSSOVER_RECENCY_BARS, MAX_VOLUME_RATIO, MIN_DAILY_HISTORY,
                     MAX_STOP_DISTANCE_PCT_BY_STYLE, BREAKDOWN_RESOLUTION_LOOKBACK,
                     VOLUME_CONFIRMATION_MARGIN, REVERSAL_LOOKBACK_BARS,
                     REVERSAL_DAY_PCT, REVERSAL_DAY_VOL_MULT,
-                    MARKET_REGIME_FAIL_CLOSED)
+                    MARKET_REGIME_FAIL_CLOSED, MIN_TECHNICAL_SCORE_FOR_BUY,
+                    MIN_FUNDAMENTAL_DATA_POINTS_FOR_BUY,
+                    MIN_FUNDAMENTAL_QUALITY_FOR_BUY,
+                    MAX_FUNDAMENTAL_DEBT_TO_EQUITY, MAX_FUNDAMENTAL_PE,
+                    ADX_MIN_FOR_BUY, ADX_STRONG_FOR_NO_TRIGGER,
+                    VOLUME_CONFIRMATION_MARGIN_BY_STYLE,
+                    ALLOW_DAILY_BAR_INTRADAY_BUY)
 from indicators import find_unresolved_breakdown
 
 # ─────────────────────────────────────────────
@@ -132,7 +159,7 @@ def check_earnings_risk(symbol: str) -> dict:
     """
     from config import EARNINGS_BLACKOUT_DAYS
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(resolve_provider_ticker(symbol))
         cal = ticker.calendar
         if cal is None or cal.empty:
             return {"days_to_earnings": None, "earnings_date": None, "risk": False}
@@ -209,6 +236,65 @@ def market_regime_blocks_buy(regime: str,
             )
         return False, ""
     return False, ""
+
+
+def fundamental_buy_gate(fundamentals: dict, quality_score: float,
+                         sector: str = None) -> tuple[bool, list[str]]:
+    """Require enough current fundamental evidence for an actionable BUY."""
+    if not fundamentals:
+        return False, ["Fundamental data unavailable — WATCHLIST only"]
+
+    evidence_keys = (
+        "returnOnEquity", "returnOnCapitalEmployed", "debtToEquity",
+        "freeCashflow", "profitMargins", "operatingMargins", "trailingPE",
+        "forwardPE", "priceToBook", "earningsGrowth",
+        "earningsQuarterlyGrowth",
+    )
+    evidence = [key for key in evidence_keys if fundamentals.get(key) is not None]
+    failures = []
+    if len(evidence) < MIN_FUNDAMENTAL_DATA_POINTS_FOR_BUY:
+        failures.append(
+            f"Only {len(evidence)} fundamental data points available "
+            f"({MIN_FUNDAMENTAL_DATA_POINTS_FOR_BUY} required) — WATCHLIST only"
+        )
+    if float(quality_score or 0) < MIN_FUNDAMENTAL_QUALITY_FOR_BUY:
+        failures.append(
+            f"Fundamental quality score {quality_score:.1f} below "
+            f"{MIN_FUNDAMENTAL_QUALITY_FOR_BUY} — WATCHLIST only"
+        )
+
+    def numeric(*keys):
+        for key in keys:
+            value = fundamentals.get(key)
+            if isinstance(value, (int, float)) and np.isfinite(value):
+                return float(value)
+        return None
+
+    roe = numeric("returnOnEquity")
+    roce = numeric("returnOnCapitalEmployed")
+    margins = numeric("profitMargins", "operatingMargins")
+    fcf = numeric("freeCashflow")
+    debt = numeric("debtToEquity")
+    pe = numeric("forwardPE", "trailingPE")
+
+    # A senior review needs an actual engine of returns, not only technical
+    # momentum and a blended score whose missing fields may be neutral.
+    if not any(value is not None and value > 0 for value in (roe, roce, margins, fcf)):
+        failures.append("No positive profitability or cash-flow evidence — WATCHLIST only")
+    sector_thresholds = strategies.get_sector_thresholds(sector)
+    max_debt = sector_thresholds.get("debt_max", MAX_FUNDAMENTAL_DEBT_TO_EQUITY)
+    max_pe = sector_thresholds.get("pe_max", MAX_FUNDAMENTAL_PE)
+    if debt is not None and debt > max_debt:
+        failures.append(
+            f"Debt-to-equity {debt:.2f} is too high "
+            f"(> {max_debt:g} for {sector or 'unknown sector'}) — WATCHLIST only"
+        )
+    if pe is not None and pe > max_pe:
+        failures.append(
+            f"Forward/trailing P/E {pe:.1f} is excessive "
+            f"(> {max_pe:g} for {sector or 'unknown sector'}) — WATCHLIST only"
+        )
+    return not failures, failures
 
 
 def _historical_signal_win_rate(close: pd.Series, bb_pband_ser: pd.Series,
@@ -339,7 +425,9 @@ def inherit_strict_style_failures(style_failures: dict, style: str) -> list:
     inherited = []
     for st in stricter:
         for f in style_failures.get(st, []):
-            if ("ATR stop" in f or "Volume confirmation" in f or f in inherited):
+            if ("ATR stop" in f or "Volume confirmation" in f
+                    or "Intraday BUY requires intraday candles" in f
+                    or f in inherited):
                 continue
             inherited.append(f)
     return inherited
@@ -361,7 +449,7 @@ class StockScreener:
                 from data_cache import fetch_history
                 df = fetch_history(symbol, period=period, interval='1d')
             except Exception:
-                ticker = yf.Ticker(symbol)
+                ticker = yf.Ticker(resolve_provider_ticker(symbol))
                 df = ticker.history(period=period, interval="1d")
             if df is None or getattr(df, 'empty', True) or len(df) < MIN_DAILY_HISTORY:
                 return None
@@ -895,7 +983,7 @@ class StockScreener:
             failures.append("Price is not above EMA21")
         if ind.get("macd_hist", 0) <= 0 or ind.get("macd_crossover") == "bearish":
             failures.append("MACD momentum is not bullish")
-        if ind.get("adx", 0) < 20:
+        if ind.get("adx", 0) < ADX_MIN_FOR_BUY:
             failures.append(f"Trend strength is weak (ADX {ind.get('adx', 0)})")
         # Use effective volume ratio (handles partial-day volume during market hours).
         # Two layers: the raw minimum must be STRICTLY exceeded (no boundary pass),
@@ -907,10 +995,13 @@ class StockScreener:
         min_vol = float(c["min_volume_ratio"])
         if eff_vol <= min_vol:
             failures.append(f"Volume confirmation below {min_vol:g}x average")
-        elif eff_vol < min_vol * VOLUME_CONFIRMATION_MARGIN:
+        volume_margin = VOLUME_CONFIRMATION_MARGIN_BY_STYLE.get(
+            style, VOLUME_CONFIRMATION_MARGIN
+        )
+        if eff_vol > min_vol and eff_vol < min_vol * volume_margin:
             failures.append(
                 f"Volume confirmation is marginal ({eff_vol:.2f}x vs "
-                f"{min_vol:g}x minimum with {VOLUME_CONFIRMATION_MARGIN:g}x buffer)"
+                f"{min_vol:g}x minimum with {volume_margin:g}x buffer)"
             )
         if ind.get("price_change_pct", 0) < -1:
             failures.append("Recent daily price weakness exceeds 1%")
@@ -938,13 +1029,13 @@ class StockScreener:
                     "or EMA21/50 crossover) — drift without ignition"
                 )
         elif not fresh_trigger:
-            strong_trend = float(ind.get("adx", 0) or 0) >= 25
+            strong_trend = float(ind.get("adx", 0) or 0) >= ADX_STRONG_FOR_NO_TRIGGER
             strong_vol = eff_vol >= 1.0
             tf_ok = ind.get("multi_tf_confirm") is not False
             if not (strong_trend and strong_vol and tf_ok):
                 failures.append(
                     "No fresh bullish trigger and trend too weak for a positional BUY "
-                    "(need ADX>=25, volume>=1.0x and weekly confirmation)"
+                    f"(need ADX>={ADX_STRONG_FOR_NO_TRIGGER}, volume>=1.0x and weekly confirmation)"
                 )
         # Stop-distance cap: if the ATR stop sits too far below entry, one
         # adverse day (or a gap) inflicts an outsized loss. HINDCOPPER
@@ -1072,7 +1163,7 @@ class StockScreener:
 
             # fetch fundamentals (yfinance.info) once per symbol and compute strategy scores
             try:
-                ticker_obj = yf.Ticker(symbol)
+                ticker_obj = yf.Ticker(resolve_provider_ticker(symbol))
                 fundamentals = ticker_obj.info or {}
             except Exception:
                 fundamentals = {}
@@ -1117,6 +1208,28 @@ class StockScreener:
 
                         if ensemble_score >= BUY_MIN_ENSEMBLE:
                             is_buy, failed_checks = self.evaluate_buy_eligibility(ind, style)
+
+                            min_technical = MIN_TECHNICAL_SCORE_FOR_BUY.get(style, 65)
+                            if score < min_technical:
+                                is_buy = False
+                                failed_checks = list(failed_checks) + [
+                                    f"Technical score {score} below {min_technical} "
+                                    "BUY floor — WATCHLIST only"
+                                ]
+
+                            fundamental_ok, fundamental_failures = fundamental_buy_gate(
+                                fundamentals, quality_score, sector=sector
+                            )
+                            if not fundamental_ok:
+                                is_buy = False
+                                failed_checks = list(failed_checks) + fundamental_failures
+
+                            if style == "intraday" and not ALLOW_DAILY_BAR_INTRADAY_BUY:
+                                is_buy = False
+                                failed_checks = list(failed_checks) + [
+                                    "Intraday BUY requires intraday candles; daily data is "
+                                    "WATCHLIST-only until an intraday feed is available"
+                                ]
 
                             # Inherit structural failures from stricter styles.
                             inherited = inherit_strict_style_failures(style_failures, style)
@@ -1209,6 +1322,19 @@ class StockScreener:
             if not stocks:
                 print("  No stocks passed the filter today.")
                 continue
+            decisions = Counter(s.get("selection_decision", "WATCHLIST")
+                                for s in stocks)
+            reasons = Counter(
+                failure
+                for stock in stocks
+                for failure in stock.get("eligibility_failures", [])
+            )
+            print(f"  Decision funnel: BUY={decisions.get('BUY', 0)} | "
+                  f"WATCHLIST={decisions.get('WATCHLIST', 0)}")
+            if reasons:
+                print("  Top rejection reasons:")
+                for reason, count in reasons.most_common(3):
+                    print(f"    {count}x {reason}")
             print(f"  {'#':<3} {'Symbol':<14} {'Price':>8} {'RSI':>6} {'Vol Ratio':>10} {'Score':>7}")
             print(f"  {'─'*52}")
             for i, s in enumerate(stocks, 1):

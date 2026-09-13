@@ -111,7 +111,8 @@ class IndicatorEngine:
                 from data_cache import fetch_history
                 df = fetch_history(self.symbol, period=self.period, interval='1d')
             except Exception:
-                ticker = yf.Ticker(self.symbol)
+                from fundamental_snapshots import resolve_provider_ticker
+                ticker = yf.Ticker(resolve_provider_ticker(self.symbol))
                 df = ticker.history(period=self.period, interval="1d")
 
             if df is None or df.empty:

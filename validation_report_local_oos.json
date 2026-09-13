@@ -1,0 +1,69 @@
+{
+  "generated_at": "2026-09-06 22:48:39",
+  "universe_size": 40,
+  "styles": [
+    "swing",
+    "positional"
+  ],
+  "quality_proxy": 20.0,
+  "regime_filter": false,
+  "history_period": "5y",
+  "fundamentals_required": false,
+  "price_data_source": "local_csv",
+  "validation_start": "2024-01-01",
+  "validation_end": "2026-09-04",
+  "fundamental_snapshot_coverage": {
+    "symbols_requested": 40,
+    "symbols_with_snapshots": 0,
+    "coverage_pct": 0.0
+  },
+  "by_style": {
+    "swing": {
+      "style": "swing",
+      "signals": 6,
+      "suppressed_by_regime": 0,
+      "suppressed_by_missing_or_weak_fundamentals": 0,
+      "symbols_tested": 39,
+      "trades": 6,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.5,
+      "avg_return_pct": 4.16,
+      "median_return_pct": 2.98,
+      "best_pct": 14.71,
+      "worst_pct": -3.94,
+      "avg_hold_bars": 12.3,
+      "profit_factor": 4.43,
+      "fwd_1d_win_pct": 83.3,
+      "fwd_5d_win_pct": 16.7,
+      "fwd_10d_win_pct": 66.7,
+      "total_return_pct": 5.04,
+      "cagr": 0.024,
+      "max_drawdown_pct": -1.35
+    },
+    "positional": {
+      "style": "positional",
+      "signals": 7,
+      "suppressed_by_regime": 0,
+      "suppressed_by_missing_or_weak_fundamentals": 0,
+      "symbols_tested": 39,
+      "trades": 7,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.286,
+      "avg_return_pct": 0.15,
+      "median_return_pct": -2.78,
+      "best_pct": 15.58,
+      "worst_pct": -3.94,
+      "avg_hold_bars": 14.4,
+      "profit_factor": 1.07,
+      "fwd_1d_win_pct": 42.9,
+      "fwd_5d_win_pct": 28.6,
+      "fwd_10d_win_pct": 42.9,
+      "total_return_pct": 0.15,
+      "cagr": 0.0008,
+      "max_drawdown_pct": -2.91
+    }
+  },
+  "nifty_benchmark": {
+    "available": false
+  }
+}

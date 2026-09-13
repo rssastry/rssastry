@@ -15,7 +15,7 @@ duplicated; a mid-file gap is back-filled; symbols without a CSV yet are
 back-filled with 5 years of history.  Line endings (CRLF) are preserved.
 
 Usage:
-    python update_price_files.py                 # update the whole universe
+    python update_price_files.py                 # update universe + ^NSEI benchmark
     python update_price_files.py -s RELIANCE,TCS # a subset (net-safe test)
     python update_price_files.py --dry-run       # report without writing
 """
@@ -30,6 +30,9 @@ import yfinance as yf
 
 from price_store import CSV_COLUMNS, PRICE_DIR, csv_path_for
 from screener import NSE_STOCKS
+from fundamental_snapshots import resolve_provider_ticker
+
+BENCHMARK_SYMBOLS = ["^NSEI"]
 
 BACKFILL_PERIOD = "5y"
 GAP_LOOKBACK_DAYS = 45   # fetch this many extra days to detect/repair gaps
@@ -88,7 +91,7 @@ def _fetch_once(symbol: str, start_date=None, end_exclusive=None,
         kwargs["start"] = start_date
     if end_exclusive is not None:
         kwargs["end"] = end_exclusive
-    df = yf.Ticker(symbol).history(**kwargs)
+    df = yf.Ticker(resolve_provider_ticker(symbol)).history(**kwargs)
     if df is None or df.empty:
         return None
     df.index = _ist_wall_dates(df.index)
@@ -196,7 +199,7 @@ def update_one(symbol: str, dry_run: bool = False) -> str:
 def update_all(symbols=None, dry_run: bool = False) -> dict:
     """Update the whole universe (or the given symbols)."""
     import time
-    symbols = list(symbols or NSE_STOCKS)
+    symbols = list(symbols or (NSE_STOCKS + BENCHMARK_SYMBOLS))
     summary = {"updated": 0, "backfilled": 0, "merged": 0,
                "unchanged": 0, "failed": 0, "details": {}}
     for sym in symbols:

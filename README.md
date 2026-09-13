@@ -51,6 +51,39 @@ Each screener run records the quality fields it received in
 these files backed up. They become useful for point-in-time tests after enough
 history has accumulated, but they do not recreate older data.
 
+## Historical fundamentals (free backfill from yfinance statements)
+
+`backfill_fundamental_history.py` reconstructs 5+ years of *point-in-time*
+annual fundamentals for the whole universe, for free, from the per-fiscal-year
+statements yfinance already exposes (`Ticker.income_stmt`, `.balance_sheet`,
+`.cashflow`). Each completed fiscal year becomes one dated record in the same
+`data_cache/fundamental_snapshots/<SYMBOL>.jsonl` files the validation harness
+reads — no schema change:
+
+```text
+.venv\Scripts\python.exe backfill_fundamental_history.py                 # all local symbols
+.venv\Scripts\python.exe backfill_fundamental_history.py --dry-run        # report only
+.venv\Scripts\python.exe backfill_fundamental_history.py -s RELIANCE.NS,TCS.NS
+.venv\Scripts\python.exe backfill_fundamental_history.py --force          # regenerate statement rows
+```
+
+- Row `as_of` = fiscal-year end + a 120-day filing buffer, so a signal bar
+  dated before `as_of` can never see that annual report (anti-lookahead).
+- The newest fiscal-year column is skipped by default (`--no-skip-latest` to
+  include it) because Yahoo still labels it an estimate; the daily
+  `yfinance.info` captures already cover the recent window.
+- Reconstructed fields use the exact names the gate/scorers consume:
+  `returnOnEquity`, `returnOnCapitalEmployed`, `debtToEquity`,
+  `profitMargins`, `operatingMargins`, `freeCashflow`, `earningsGrowth`,
+  `payoutRatio`, `capitalExpenditures`, plus per-share `eps` / `bvps`.
+- Statements carry no market prices, so valuation is reconstructed at use
+  time: `fundamental_snapshots.apply_price_valuation` computes a point-in-time
+  `trailingPE` / `priceToBook` from the signal-bar close times the FY EPS /
+  BVPS. `validate_buy_logic.py` calls it for every historical signal bar.
+- `marketCap`, `forwardPE`, `heldPercentInsiders` and sector remain
+  current-only (not reconstructible from annual statements); those rows simply
+  stay absent until daily snapshots accumulate for that window.
+
 For a true five-year fundamental backtest, use a provider that supplies
 point-in-time historical fundamentals and valuation ratios. Import each value
 with both `period_end` and `available_date`; the backtest must use

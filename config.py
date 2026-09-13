@@ -1,4 +1,5 @@
 # config.py — shared configuration constants
+import os
 
 # Count completed trading bars, not calendar days (Friday -> Monday is one bar).
 CROSSOVER_RECENCY_BARS = 2
@@ -13,6 +14,19 @@ CACHE_DIR = 'data_cache'
 # Keep enough daily history for multi-year walk-forward validation. The cache
 # key includes the period, so this does not mix 5y data with shorter requests.
 HISTORICAL_DATA_PERIOD = "5y"
+
+# ── Decision Journal ────────────────────────────────────────────────
+# The journal (journal.py) resolves each logged decision forward against the
+# frozen local price CSVs. Each style's entry has a max holding period in
+# COMPLETED TRADING BARS; when a decision's position survives past that many
+# bars without hitting stop or target, it is marked EXPIRED (time-based exit).
+STYLE_MAX_HOLD_BARS = {
+    "intraday": 3,
+    "swing": 15,
+    "positional": 60,
+}
+# SQLite store for the decision journal (kept under CACHE_DIR, gitignored).
+JOURNAL_DB_PATH = os.path.join(CACHE_DIR, "decision_journal.sqlite")
 
 # ── Risk & validation ─────────────────────────────────────────────
 MIN_QUANTITY = 1
@@ -49,6 +63,19 @@ MARKET_REGIME_LOOKBACK = 20
 MARKET_REGIME_EMA = 50
 MIN_MARKET_ABOVE_EMA_PCT = 0.0  # NIFTY must be at/above its EMA50 to allow new buys
 
+# Entry confirmation thresholds. ADX 20 is the minimum tradeable trend; ADX 25
+# is the stronger-trend exception used when a positional setup has no fresh
+# crossover. Volume buffers are style-specific because short-term entries need
+# stronger participation than slower positional entries.
+ADX_MIN_FOR_BUY = 20
+ADX_STRONG_FOR_NO_TRIGGER = 25
+VOLUME_CONFIRMATION_MARGIN_BY_STYLE = {
+    "intraday": 1.15,
+    "short_term": 1.15,
+    "swing": 1.10,
+    "positional": 1.10,
+}
+
 # ── Breakdown / dead-cat-bounce guard ─────────────────────────────
 # A high-volume selloff day followed by an up-day bounce is the classic
 # "dead-cat bounce" / bull-trap structure. Unless that bounce reclaims the
@@ -81,7 +108,7 @@ BOUNCE_HIST_MIN_SAMPLES = 12     # min samples for the empirical bounce-fade sta
 # (Actual thresholds live in SCREEN_CRITERIA in screener.py; this buffer
 # requires the ratio to exceed the minimum by a real margin, so a recorded
 # 1.0x (rounded) can not squeak past a 1.0x minimum.)
-VOLUME_CONFIRMATION_MARGIN = 1.10
+VOLUME_CONFIRMATION_MARGIN = 1.10  # backward-compatible fallback
 
 # A recent high-volume down-reversal (distribution) candle near the signal bar
 # warns that the "positive day" is likely a low-volume bounce into overhead
@@ -100,6 +127,30 @@ MARKET_REGIME_FAIL_CLOSED = True
 # A candidate below this ensemble score never reaches the BUY gate at all
 # (was a lenient 35). Marginal picks do not consume AI budget.
 BUY_MIN_ENSEMBLE = 50
+
+# A BUY is an approval, not merely a ranked technical candidate. These floors
+# stop a marginal technical score from being rescued by a weak quality overlay.
+MIN_TECHNICAL_SCORE_FOR_BUY = {
+    "intraday": 70,
+    "short_term": 70,
+    "swing": 65,
+    "positional": 70,
+}
+
+# Missing fundamentals must reduce a candidate to WATCHLIST instead of being
+# treated as neutral evidence.
+MIN_FUNDAMENTAL_DATA_POINTS_FOR_BUY = 4
+MIN_FUNDAMENTAL_QUALITY_FOR_BUY = 35
+
+# Valuation sanity caps applied inside fundamental_buy_gate. A candidate with
+# excessive leverage or an extreme multiple is not a strong BUY regardless of
+# momentum. Tunable so the validation harness can test stricter/looser settings.
+MAX_FUNDAMENTAL_DEBT_TO_EQUITY = 2.5
+MAX_FUNDAMENTAL_PE = 60
+
+# The application currently supplies daily OHLCV only. Daily bars cannot
+# support an honest intraday recommendation.
+ALLOW_DAILY_BAR_INTRADAY_BUY = False
 
 # AI is a real second opinion (veto), not a label: if the AI read is SELL/HOLD,
 # UNKNOWN, or a BUY with confidence below this floor, the deterministic BUY is

@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-09-06 22:32:59",
+  "universe_size": 5,
+  "styles": [
+    "swing"
+  ],
+  "quality_proxy": 20.0,
+  "regime_filter": true,
+  "history_period": "5y",
+  "fundamentals_required": true,
+  "fundamental_snapshot_coverage": {
+    "symbols_requested": 5,
+    "symbols_with_snapshots": 0,
+    "coverage_pct": 0.0
+  },
+  "by_style": {
+    "swing": {
+      "style": "swing",
+      "signals": 0,
+      "suppressed_by_regime": 0,
+      "suppressed_by_missing_or_weak_fundamentals": 112,
+      "symbols_tested": 5,
+      "trades": 0
+    }
+  },
+  "nifty_benchmark": {
+    "available": true,
+    "total_return_pct": 41.3,
+    "cagr": 0.077,
+    "max_drawdown_pct": -16.47,
+    "window_years": 4.66
+  }
+}

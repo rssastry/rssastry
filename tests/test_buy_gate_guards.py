@@ -13,7 +13,7 @@ Regression tests for the buy-gate safety guards added after the SUNPHARMA
 from config import (VOLUME_CONFIRMATION_MARGIN, MARKET_REGIME_FAIL_CLOSED,
                     MAX_STOP_DISTANCE_PCT_BY_STYLE, ATR_MULT)
 from screener import (StockScreener, market_regime_blocks_buy,
-                      inherit_strict_style_failures)
+                      inherit_strict_style_failures, fundamental_buy_gate)
 
 
 def _passing_stock(**overrides):
@@ -139,17 +139,22 @@ def test_recent_reversal_reclaimed_does_not_block():
 
 
 def test_reversal_detected_in_compute_indicators_sunpharma():
-    """End-to-end: the real cached SUNPHARMA bar must flag the reversal.
+    """End-to-end reversal detection uses a stable synthetic price series."""
+    import numpy as np
+    import pandas as pd
 
-    Uses the shared data pipeline; skipped if the cache is unavailable.
-    """
-    try:
-        from data_cache import fetch_history
-        df = fetch_history("SUNPHARMA.NS", period="1y", interval="1d")
-    except Exception:
-        df = None
-    if df is None or df.empty:
-        return  # offline - nothing to assert
+    dates = pd.date_range("2025-01-01", periods=120, freq="D")
+    close = np.linspace(90.0, 100.0, len(dates))
+    close[-2:] = [96.5, 97.0]
+    df = pd.DataFrame({
+        "Open": close,
+        "High": close + 0.5,
+        "Low": close - 0.5,
+        "Close": close,
+        "Volume": np.full(len(dates), 100_000.0),
+    }, index=dates)
+    df.iloc[-2, df.columns.get_loc("Volume")] = 250_000.0
+
     ind = StockScreener().compute_indicators(df)
     assert ind.get("recent_reversal_day") is True
     assert ind.get("reclaims_reversal_level") is False
@@ -190,6 +195,86 @@ def test_market_regime_fail_closed_default():
     assert not market_regime_blocks_buy("bullish")[0]
 
 
+def test_missing_fundamentals_cannot_approve_buy():
+    ok, failures = fundamental_buy_gate({}, 100)
+    assert not ok
+    assert any("Fundamental data unavailable" in failure for failure in failures)
+
+
+def test_incomplete_fundamentals_cannot_approve_buy():
+    fundamentals = {
+        "returnOnEquity": 0.2,
+        "debtToEquity": 0.5,
+        "freeCashflow": 1,
+    }
+    ok, failures = fundamental_buy_gate(fundamentals, 80)
+    assert not ok
+    assert any("data points" in failure for failure in failures)
+
+
+def test_complete_fundamentals_can_approve_quality_gate():
+    fundamentals = {
+        "returnOnEquity": 0.2,
+        "debtToEquity": 0.5,
+        "freeCashflow": 1,
+        "profitMargins": 0.1,
+    }
+    ok, failures = fundamental_buy_gate(fundamentals, 40)
+    assert ok, failures
+
+
+def test_fundamental_gate_rejects_high_debt():
+    fundamentals = {
+        "returnOnEquity": 0.2,
+        "debtToEquity": 3.0,
+        "freeCashflow": 1,
+        "profitMargins": 0.1,
+    }
+    ok, failures = fundamental_buy_gate(fundamentals, 40)
+    assert not ok
+    assert any("Debt-to-equity" in failure for failure in failures)
+
+
+def test_fundamental_gate_uses_sector_debt_norms():
+    fundamentals = {
+        "returnOnEquity": 0.2,
+        "debtToEquity": 5.0,
+        "freeCashflow": 1,
+        "profitMargins": 0.1,
+    }
+    ok, failures = fundamental_buy_gate(fundamentals, 40, sector="Financial Services")
+    assert ok, failures
+
+    ok, failures = fundamental_buy_gate(fundamentals, 40, sector="Technology")
+    assert not ok
+    assert any("Debt-to-equity" in failure for failure in failures)
+
+
+def test_fundamental_gate_rejects_excessive_valuation():
+    fundamentals = {
+        "returnOnEquity": 0.2,
+        "debtToEquity": 0.5,
+        "freeCashflow": 1,
+        "profitMargins": 0.1,
+        "forwardPE": 65,
+    }
+    ok, failures = fundamental_buy_gate(fundamentals, 40)
+    assert not ok
+    assert any("P/E" in failure for failure in failures)
+
+
+def test_fundamental_gate_rejects_no_return_engine():
+    fundamentals = {
+        "debtToEquity": 0.5,
+        "trailingPE": 20,
+        "priceToBook": 2,
+        "earningsGrowth": 0,
+    }
+    ok, failures = fundamental_buy_gate(fundamentals, 40)
+    assert not ok
+    assert any("profitability or cash-flow" in failure for failure in failures)
+
+
 def test_market_regime_unknown_optional_pass():
     """Fail-closed can be disabled explicitly, but must then not block."""
     block, reason = market_regime_blocks_buy("unknown", fail_closed=False)
@@ -222,6 +307,18 @@ def test_loser_style_inherits_reversal_from_stricter():
     }
     inherited = inherit_strict_style_failures(style_failures, "swing")
     assert inherited and "reversal" in inherited[0]
+
+
+def test_intraday_data_requirement_does_not_propagate():
+    """Daily data blocks intraday BUYs, but remains valid for daily styles."""
+    style_failures = {
+        "intraday": [
+            "Intraday BUY requires intraday candles; daily data is WATCHLIST-only "
+            "until an intraday feed is available"
+        ]
+    }
+    assert inherit_strict_style_failures(style_failures, "swing") == []
+    assert inherit_strict_style_failures(style_failures, "positional") == []
 
 
 # ── Stop-distance caps (triggered by the ATR_STYLE change) ──────

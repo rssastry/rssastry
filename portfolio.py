@@ -52,7 +52,8 @@ def get_sector(symbol: str) -> str:
         return _sector_cache[sym]
     try:
         import yfinance as yf
-        info = yf.Ticker(sym + ".NS").info or {}
+        from fundamental_snapshots import resolve_provider_ticker
+        info = yf.Ticker(resolve_provider_ticker(sym + ".NS")).info or {}
         sector = info.get("sector") or ""
         _sector_cache[sym] = sector
         return sector
@@ -81,7 +82,7 @@ def get_correlation(sym1: str, sym2: str) -> float:
 
 
 def check_portfolio_risk(symbol: str, sector: str = None, cash: float = None,
-                         notional: float = None) -> tuple[bool, list[str]]:
+                         notional: float = None, risk_amount: float = None) -> tuple[bool, list[str]]:
     """Check if adding a new position violates portfolio risk limits.
 
     Returns (is_allowed, list_of_failure_messages).
@@ -111,14 +112,15 @@ def check_portfolio_risk(symbol: str, sector: str = None, cash: float = None,
                 f"Position notional {projected_notional:,.0f} exceeds max {MAX_POSITION_PCT * 100:.0f}% "
                 f"of cash ({cash_val * MAX_POSITION_PCT:,.0f})"
             )
-        if cash_val > 0 and projected_notional > cash_val * MAX_ACCOUNT_RISK_PCT:
+        if (cash_val > 0 and risk_amount is not None
+                and float(risk_amount) > cash_val * MAX_ACCOUNT_RISK_PCT):
             failures.append(
-                f"Single position risk {projected_notional:,.0f} exceeds max {MAX_ACCOUNT_RISK_PCT * 100:.0f}% "
+                f"Single position risk {float(risk_amount):,.0f} exceeds max {MAX_ACCOUNT_RISK_PCT * 100:.0f}% "
                 f"of account cash ({cash_val * MAX_ACCOUNT_RISK_PCT:,.0f})"
             )
 
     # Sector concentration guard.
-    sector_name = (sector or "").strip()
+    sector_name = (sector or get_sector(symbol)).strip()
     if sector_name:
         sector_total_value = sum(
             float(h.get("investment", 0) or h.get("buy_price", 0) * h.get("quantity", 0) or 0.0)
@@ -226,8 +228,14 @@ def add_holding(symbol: str, buy_price: float, quantity: int,
 
     # Portfolio-level risk checks (sector cap, correlation, position cap)
     notional = float(buy_price) * int(quantity)
+    stop_risk = None
+    try:
+        if float(stop_loss) < float(buy_price):
+            stop_risk = (float(buy_price) - float(stop_loss)) * int(quantity)
+    except (TypeError, ValueError):
+        pass
     risk_ok, risk_failures = check_portfolio_risk(
-        symbol, notional=notional, cash=cash
+        symbol, notional=notional, cash=cash, risk_amount=stop_risk
     )
     if not risk_ok:
         last_add_failures.clear()
@@ -943,8 +951,12 @@ def suggest_buys(cash: float, max_positions: int = 10, universe: Optional[List[s
         notional = qty * price
 
         # Portfolio-level risk check (sector cap, correlation)
+        risk_amount = None
+        if stop_price is not None and stop_price < price:
+            risk_amount = (price - stop_price) * qty
         risk_ok, risk_failures = check_portfolio_risk(
-            c["symbol"], notional=notional, cash=cash
+            c["symbol"], notional=notional, cash=cash,
+            risk_amount=risk_amount
         )
         if not risk_ok:
             continue

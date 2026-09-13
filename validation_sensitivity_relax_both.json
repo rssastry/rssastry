@@ -1,0 +1,53 @@
+{
+  "generated_at": "sensitivity",
+  "universe": 200,
+  "loaded": 196,
+  "variant": "relax_both",
+  "patches": {
+    "MIN_FUNDAMENTAL_QUALITY_FOR_BUY": 25,
+    "MIN_FUNDAMENTAL_DATA_POINTS_FOR_BUY": 3,
+    "MAX_FUNDAMENTAL_DEBT_TO_EQUITY": 3.5,
+    "MAX_FUNDAMENTAL_PE": 80
+  },
+  "by_style": {
+    "intraday": {
+      "signals": 11,
+      "suppressed_regime": 1,
+      "suppressed_fundamentals": 1599,
+      "trades": 11,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.545,
+      "avg_return_pct": -0.05,
+      "profit_factor": 0.94,
+      "total_return_pct": -0.12,
+      "cagr": -0.0006,
+      "max_drawdown_pct": -1.81
+    },
+    "swing": {
+      "signals": 6,
+      "suppressed_regime": 2,
+      "suppressed_fundamentals": 2251,
+      "trades": 6,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.667,
+      "avg_return_pct": 6.52,
+      "profit_factor": 12.74,
+      "total_return_pct": 8.03,
+      "cagr": 0.0361,
+      "max_drawdown_pct": -0.56
+    },
+    "positional": {
+      "signals": 9,
+      "suppressed_regime": 2,
+      "suppressed_fundamentals": 1824,
+      "trades": 9,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.444,
+      "avg_return_pct": 9.73,
+      "profit_factor": 7.89,
+      "total_return_pct": 17.96,
+      "cagr": 0.0808,
+      "max_drawdown_pct": -2.52
+    }
+  }
+}

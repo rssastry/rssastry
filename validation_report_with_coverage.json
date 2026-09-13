@@ -1,0 +1,85 @@
+{
+  "generated_at": "2026-09-10 06:32:52",
+  "universe_size": 143,
+  "styles": [
+    "swing",
+    "positional"
+  ],
+  "quality_proxy": 20.0,
+  "regime_filter": true,
+  "history_period": "5y",
+  "fundamentals_required": true,
+  "price_data_source": "local_csv",
+  "validation_start": null,
+  "validation_end": null,
+  "fundamental_snapshot_coverage": {
+    "symbols_requested": 143,
+    "symbols_with_snapshots": 142,
+    "coverage_pct": 99.3,
+    "missing_symbols": [
+      "LTIM.NS"
+    ],
+    "stale_symbols": [],
+    "oldest_snapshot": "2022-04-30",
+    "newest_snapshot": "2026-09-10",
+    "snapshots_by_source": {
+      "yfinance.statements": 427,
+      "yfinance.info": 420
+    },
+    "backfill_period_end_min": "2021-12-31",
+    "backfill_period_end_max": "2025-03-31"
+  },
+  "by_style": {
+    "swing": {
+      "style": "swing",
+      "signals": 5,
+      "suppressed_by_regime": 1,
+      "suppressed_by_missing_or_weak_fundamentals": 1938,
+      "symbols_tested": 142,
+      "trades": 5,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.6,
+      "avg_return_pct": 4.88,
+      "median_return_pct": 6.48,
+      "best_pct": 11.04,
+      "worst_pct": -2.81,
+      "avg_hold_bars": 11.8,
+      "profit_factor": 8.32,
+      "fwd_1d_win_pct": 66.7,
+      "fwd_5d_win_pct": 33.3,
+      "fwd_10d_win_pct": 66.7,
+      "total_return_pct": 4.94,
+      "cagr": 0.0224,
+      "max_drawdown_pct": -0.56
+    },
+    "positional": {
+      "style": "positional",
+      "signals": 6,
+      "suppressed_by_regime": 1,
+      "suppressed_by_missing_or_weak_fundamentals": 1594,
+      "symbols_tested": 142,
+      "trades": 6,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.333,
+      "avg_return_pct": 0.92,
+      "median_return_pct": -1.65,
+      "best_pct": 14.22,
+      "worst_pct": -2.81,
+      "avg_hold_bars": 14.2,
+      "profit_factor": 1.62,
+      "fwd_1d_win_pct": 28.6,
+      "fwd_5d_win_pct": 42.9,
+      "fwd_10d_win_pct": 42.9,
+      "total_return_pct": 1.06,
+      "cagr": 0.0055,
+      "max_drawdown_pct": -1.76
+    }
+  },
+  "nifty_benchmark": {
+    "available": true,
+    "total_return_pct": 35.79,
+    "cagr": 0.068,
+    "max_drawdown_pct": -16.47,
+    "window_years": 4.65
+  }
+}

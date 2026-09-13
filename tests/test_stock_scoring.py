@@ -243,6 +243,62 @@ def test_sector_exposure_limit_blocks_overweight_buy():
         save_portfolio(json.loads(orig))
 
 
+def test_account_risk_uses_stop_distance_not_position_notional():
+    orig = json.dumps(load_portfolio())
+    try:
+        save_portfolio({'holdings': [], 'closed_trades': [], 'last_updated': ''})
+
+        # A 20% notional position with only 1% stop risk should be allowed.
+        ok, failures = check_portfolio_risk(
+            'TEST', cash=100000, notional=20000, risk_amount=1000
+        )
+        assert ok, failures
+
+        # A position risking more than 2% of account cash must be blocked.
+        ok, failures = check_portfolio_risk(
+            'TEST', cash=100000, notional=20000, risk_amount=2500
+        )
+        assert not ok
+        assert any('Single position risk' in failure for failure in failures)
+    finally:
+        save_portfolio(json.loads(orig))
+
+
+def test_suggest_buys_passes_stop_risk_to_portfolio_check(monkeypatch):
+    captured = []
+
+    def fake_check(symbol, sector=None, cash=None, notional=None, risk_amount=None):
+        captured.append(risk_amount)
+        return True, []
+
+    class FakeScreener:
+        def screen(self, **kwargs):
+            return {"swing": [{
+                "symbol": "TEST",
+                "yf_symbol": "TEST.NS",
+                "current_price": 100.0,
+                "atr": 10.0,
+                "ensemble_score": 80,
+                "recommendation": "BUY",
+                "style": "swing",
+            }], "positional": []}
+
+    monkeypatch.setattr("screener.StockScreener", FakeScreener)
+    monkeypatch.setattr("portfolio.check_portfolio_risk", fake_check)
+    monkeypatch.setattr("portfolio.compute_position_and_stop", lambda *args, **kwargs: {
+        "qty": 10, "stop_price": 90.0, "risk_amount": 1000.0
+    })
+    monkeypatch.setattr("portfolio.load_portfolio", lambda: {"holdings": []})
+    monkeypatch.setattr("portfolio.get_correlation", lambda *_: 0.0)
+
+    suggestions = allocate_portfolio_buy_candidates([], cash=100000)
+    assert suggestions == []
+
+    from portfolio import suggest_buys
+    suggest_buys(100000)
+    assert captured == [100.0]
+
+
 def test_rank_buy_candidates_prefers_risk_adjusted_edge():
     candidates = [
         {

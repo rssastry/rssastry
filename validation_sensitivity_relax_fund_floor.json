@@ -1,0 +1,51 @@
+{
+  "generated_at": "sensitivity",
+  "universe": 200,
+  "loaded": 196,
+  "variant": "relax_fund_floor",
+  "patches": {
+    "MIN_FUNDAMENTAL_QUALITY_FOR_BUY": 25,
+    "MIN_FUNDAMENTAL_DATA_POINTS_FOR_BUY": 3
+  },
+  "by_style": {
+    "intraday": {
+      "signals": 9,
+      "suppressed_regime": 1,
+      "suppressed_fundamentals": 1766,
+      "trades": 9,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.444,
+      "avg_return_pct": -0.67,
+      "profit_factor": 0.38,
+      "total_return_pct": -1.2,
+      "cagr": -0.0061,
+      "max_drawdown_pct": -1.81
+    },
+    "swing": {
+      "signals": 5,
+      "suppressed_regime": 1,
+      "suppressed_fundamentals": 2513,
+      "trades": 5,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.6,
+      "avg_return_pct": 4.88,
+      "profit_factor": 8.32,
+      "total_return_pct": 4.94,
+      "cagr": 0.0224,
+      "max_drawdown_pct": -0.56
+    },
+    "positional": {
+      "signals": 7,
+      "suppressed_regime": 1,
+      "suppressed_fundamentals": 2143,
+      "trades": 7,
+      "confidence": "insufficient_sample",
+      "win_rate": 0.429,
+      "avg_return_pct": 10.84,
+      "profit_factor": 9.54,
+      "total_return_pct": 15.28,
+      "cagr": 0.0691,
+      "max_drawdown_pct": -1.76
+    }
+  }
+}
