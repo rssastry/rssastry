@@ -32,4 +32,4 @@ schedule==1.2.2            # Daily job scheduler (schedular.py)
 # ── Development / test ────────────────────────────────────────
 pytest==9.1.1              # Unit test runner (tests/)
 
-gunicorn==21.2.0
+gunicorn run:app
