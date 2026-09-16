@@ -1,0 +1,136 @@
+﻿# PAGE: TODAY'S PICKS
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+elif "Picks" in page:
+    st.markdown('<div class="page-title">Today\'s AI Stock Picks</div>', unsafe_allow_html=True)
+
+    data = load_json("ai_analysis.json")
+    if not data:
+        st.info("No picks yet. Click **Run Morning Scan** in the sidebar.")
+        st.stop()
+
+    st.markdown(f'<div class="page-sub">Analysis date: {data.get("date","N/A")} â€¢ Powered by AI</div>', unsafe_allow_html=True)
+    analysis = data.get("analysis", {})
+
+    tab1, tab2, tab3 = st.tabs(["ðŸ”„  Intraday", "ðŸ“ˆ  Swing (2-5 days)", "ðŸ“…  Positional (1-4 weeks)"])
+
+    for tab, style in zip([tab1, tab2, tab3], ["intraday","swing","positional"]):
+        with tab:
+            picks = [p for p in analysis.get(style,[]) if p.get("recommendation")=="BUY"]
+            if not picks:
+                st.info(f"No qualified BUY candidates for {style} today.")
+                watchlist = [p for p in analysis.get(style, []) if p.get("recommendation") == "WATCHLIST"]
+                if watchlist:
+                    with st.expander("View watchlist and failed qualification checks"):
+                        rows = []
+                        for item in watchlist:
+                            rows.append({
+                                "Symbol": item.get("symbol", ""),
+                                "Score": item.get("ensemble_score", ""),
+                                "Decision": item.get("selection_decision", item.get("recommendation", "")),
+                                "AI view": item.get("ai_recommendation", "Not available"),
+                                "Why not qualified": "; ".join(item.get("eligibility_failures", [])) or "See analysis",
+                            })
+                        st.dataframe(pd.DataFrame(rows), hide_index=True)
+                continue
+
+            st.markdown(f"**{len(picks)} BUY signals found**", unsafe_allow_html=True)
+
+            # â”€â”€ Dashboard-side gate conditions (re-validate the pick live) â”€â”€
+            # These mirror the deterministic gate so the analyst can SEE how
+            # the BUY list survives stricter conditions and why a KOTAK-style
+            # fade candidate no longer qualifies.
+            def _fade_state(it):
+                _i = it.get("indicators") or {}
+                _w = _i.get("sig_win_pct")
+                _n = _i.get("sig_samples") or 0
+                try:
+                    return _w is not None and int(_n) >= 20 and float(_w) < 45
+                except Exception:
+                    return False
+
+            def _stretched_state(it):
+                _i = it.get("indicators") or {}
+                try:
+                    return float(_i.get("bb_pct") or 0) > 1.0 and not it.get("buy_rule_passed")
+                except Exception:
+                    return False
+
+            def _rsi_hot_state(it):
+                _i = it.get("indicators") or {}
+                try:
+                    return float(_i.get("rsi") or 0) >= 70
+                except Exception:
+                    return False
+
+            filter_desc = {
+                "Stretched above UBB":  "BB% > 1 without EMA crossover (breakout-fade)",
+                "RSI >= 70":            "Overbought / exhaustion",
+                "Historical fade setup": "Setup won next session <45% historically",
+            }
+            active_filters = st.multiselect(
+                "Exclude weak BUY candidates by condition",
+                list(filter_desc.keys()),
+                default=["Stretched above UBB", "Historical fade setup"],
+                key=f"gatefilter_{style}",
+            )
+            picks = [p for p in picks
+                     if not ("Stretched above UBB" in active_filters and _stretched_state(p))
+                     and not ("RSI >= 70" in active_filters and _rsi_hot_state(p))
+                     and not ("Historical fade setup" in active_filters and _fade_state(p))]
+
+            if not picks:
+                st.warning("All BUY candidates were excluded by the dashboard conditions. Untick a filter above to reveal the running list, or view the watchlist below.")
+                continue
+
+            # â”€â”€ Sorting controls for picks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            sort_opt = st.selectbox("Sort picks by",
+                                    ["Confidence", "R:R to T1", "R:R to T2",
+                                     "Win%", "ATR", "Volume Ratio", "Price"],
+                                    key=f"sort_{style}")
+            sort_dir = st.radio("Direction", ["Descending", "Ascending"], index=0,
+                                horizontal=True, key=f"dir_{style}")
+
+            def _rr_num(item, key):
+                raw = item.get(key) or item.get("risk_reward_ratio") or ""
+                try:
+                    return float(str(raw).split(":")[1])
+                except Exception:
+                    return 0.0
+
+            def _sort_val(item):
+                try:
+                    if sort_opt == "Confidence":
+                        return float(item.get('confidence_score', 0) or 0)
+                    if sort_opt == "R:R to T1":
+                        return _rr_num(item, 'risk_reward_t1')
+                    if sort_opt == "R:R to T2":
+                        return _rr_num(item, 'risk_reward_ratio')
+                    if sort_opt == "Win%":
+                        _i = item.get("indicators") or {}
+                        return float(_i.get("sig_win_pct") or 0)
+                    if sort_opt == "ATR":
+                        return float((item.get("indicators") or {}).get("atr", 0) or 0)
+                    if sort_opt == "Volume Ratio":
+                        return float(item.get("volume_ratio", 0) or 0)
+                    if sort_opt == "Price":
+                        return float((item.get("indicators") or {}).get("current_price", 0) or 0)
+                except Exception:
+                    return 0.0
+                return 0.0
+            picks = sorted(picks, key=_sort_val, reverse=(sort_dir == "Descending"))
+
+            for i, p in enumerate(picks, 1):
+                ind  = p.get("indicators", {})
+                ep   = p.get("entry_price", {})
+                tp   = p.get("target_prices", {})
+                ap   = p.get("alert_on_price", {})
+                conf = p.get("confidence_score", 0)
+                sym  = p.get("symbol","")
+                rec  = p.get("recommendation","")
+                risk = p.get("risk_level","Medium")
+
+                with st.expander(
+                    f"#{i}  {sym}  â€¢  â‚¹{ind.get('current_price','?')}  "
+                    f"â€¢  Confidence {conf}/100  â€¢  R:Râ†’T1 {p.get('risk_reward_t1','?')} / T2 {p.get('risk_reward_ratio','?')}",
+                    expanded=(i == 1 and len(picks) <= 5)
+                ):

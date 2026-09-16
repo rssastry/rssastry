@@ -1,0 +1,34 @@
+# requirements.txt — StockAnalysis runtime & development dependencies
+# Pinned to the versions validated in the project .venv (Python 3.11).
+# Install with:  python -m pip install -r requirements.txt
+
+# ── Data fetching ─────────────────────────────────────────────
+yfinance==1.6.0            # Yahoo Finance OHLCV + fundamentals
+requests==2.34.2           # HTTP calls (Telegram API, etc.)
+python-dotenv==1.2.2       # Load secrets from .env
+
+# ── Data processing ───────────────────────────────────────────
+pandas==3.0.5              # Data manipulation / indicators
+numpy==2.5.2               # Numerical computing
+ta==0.11.0                 # Technical analysis indicators (EMA, MACD, RSI, ATR, ADX, BB)
+pyarrow==24.0.0            # Parquet read/write for data_cache
+python-dateutil==2.9.0     # Walk-forward window math (tune.py)
+
+# ── AI / LLM second opinion ───────────────────────────────────
+groq==1.6.0                # Primary LLM engine
+google-generativeai==0.8.6 # Gemini fallback engine
+openai==3.3.1              # OpenRouter / OpenAI-compatible fallback
+
+# ── Dashboard ─────────────────────────────────────────────────
+streamlit==1.61.1          # Web dashboard UI
+plotly==6.9.0              # Interactive stock charts
+
+# ── Reporting / visualization ─────────────────────────────────
+matplotlib==3.11.1         # Equity curve + PDF report (visualize.py)
+
+# ── Scheduling ────────────────────────────────────────────────
+schedule==1.2.2            # Daily job scheduler (schedular.py)
+
+# ── Development / test ────────────────────────────────────────
+pytest==9.1.1              # Unit test runner (tests/)
+

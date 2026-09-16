@@ -131,6 +131,9 @@ def load_snapshot_as_of(symbol: str, as_of) -> dict | None:
 
     A later snapshot is never allowed to answer an earlier historical signal;
     this is the key anti-lookahead contract for fundamental validation.
+    Live-info debtToEquity readings are unit-normalized (see
+    ``normalize_debt_equity``) so a provider unit artifact never makes the
+    deterministic gate falsely reject a low-debt issuer.
     """
     cutoff = str(as_of)[:10]
     eligible = [item for item in load_snapshots(symbol)
@@ -139,12 +142,149 @@ def load_snapshot_as_of(symbol: str, as_of) -> dict | None:
         return None
     selected = max(eligible, key=lambda item: str(item.get("as_of", "")))
     values = dict(selected.get("values") or {})
+    # yfinance.info debtToEquity for NSE tickers is a broken unit (~70-800x);
+    # statements-derived snapshots are already correct and never rescaled.
+    if str(selected.get("source", "")) == "yfinance.info" and "debtToEquity" in values:
+        values["debtToEquity"] = normalize_debt_equity(values["debtToEquity"])
     values["symbol"] = selected.get("symbol", symbol.replace(".NS", ""))
     values["snapshot_as_of"] = str(selected.get("as_of", ""))[:10]
     values["snapshot_source"] = str(selected.get("source", "yfinance.info"))
     if selected.get("period_end"):
         values["period_end"] = str(selected.get("period_end", ""))[:10]
     return values
+
+
+# ── NSE debtToEquity unit artifact ──────────────────────────────────
+# yfinance.Ticker.info returns `debtToEquity` for most NSE tickers in a
+# unit that is roughly 70-800x the true ratio (checked 2026-09: TCS 10.21
+# vs 0.099, ITC 3.29 vs 0.004, DABUR 10.91 vs 0.088, HINDUNILVR 3.02 vs
+# 0.033, LT 97.6 vs 1.36, NYKAA 82.8 vs 1.01). The annual-statement
+# snapshots carry the correct value and are therefore preferred wherever
+# they exist. When ONLY a live-info reading is available, any value above
+# NSE_DEBT_UNIT_ARTIFACT_THRESHOLD is treated as the documented unit
+# artifact and scaled by NSE_DEBT_UNIT_SCALE (a genuine D/E above 5.0 for a
+# non-financial NSE issuer is very rare, and sector thresholds already
+# admit Financial Services up to 8.0).
+NSE_DEBT_UNIT_ARTIFACT_THRESHOLD = 5.0
+NSE_DEBT_UNIT_SCALE = 100.0
+
+
+def normalize_debt_equity(value) -> float | None:
+    """Return a trustworthy D/E for the fundamental gate.
+
+    Values at or below the artifact threshold are returned unchanged. Larger
+    raw readings are scaled by NSE_DEBT_UNIT_SCALE only when the scaled
+    result is itself plausible (<= threshold); otherwise the raw value is
+    kept, so a genuinely over-levered balance sheet is never hidden.
+    """
+    if value is None:
+        return None
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(raw) or raw <= 0:
+        return None
+    if raw > NSE_DEBT_UNIT_ARTIFACT_THRESHOLD:
+        scaled = raw / NSE_DEBT_UNIT_SCALE
+        if scaled <= NSE_DEBT_UNIT_ARTIFACT_THRESHOLD:
+            return round(scaled, 6)
+    return raw
+
+
+# Quality/balance-sheet fields the statements snapshots report in the
+# correct unit (D/E, ROE, ROCE, FCF) or that live info often drops entirely.
+_STATEMENT_RELIABLE_KEYS = (
+    "returnOnEquity", "returnOnCapitalEmployed", "debtToEquity",
+    "freeCashflow", "earningsGrowth", "earningsQuarterlyGrowth",
+)
+
+
+def merge_fundamental_snapshots(symbol: str, live: dict | None = None,
+                                as_of=None) -> dict:
+    """Best-available fundamentals: statements quality + live valuation.
+
+    The live scan feeds ``yfinance.Ticker.info`` straight into the
+    fundamental gate and the quality scorers, but for NSE tickers that dict
+    carries an inflated ``debtToEquity`` (unit bug) and often omits
+    ROE/ROCE/FCF. This merges the freshly captured ``live`` record with the
+    richer, unit-correct annual-statement snapshot already stored per
+    symbol, so the deterministic gate reads trustworthy leverage and
+    profitability evidence while still using the live quote for
+    price-sensitive multiples (P/E, P/B, market cap, sector).
+
+    Field policy:
+      * ``debtToEquity`` — statements value always wins (live info is broken
+        for NSE); a live-only reading is unit-normalized.
+      * other quality fields (ROE/ROCE/FCF/growth) — live wins when present,
+        statements fill gaps.
+      * valuation / price-sensitive keys (P/E, P/B, marketCap, sector,
+        industry, margins) — always the live quote when available.
+
+    ``as_of`` caps which stored snapshots may be consulted (anti-lookahead),
+    making this helper safe for historical validation runs too.
+    """
+    merged = dict(live or {})
+    records = load_snapshots(symbol)
+    if as_of is not None:
+        cutoff = str(as_of)[:10]
+        records = [rec for rec in records
+                   if str(rec.get("as_of", ""))[:10] <= cutoff]
+
+    def _latest(source: str):
+        picked = [rec for rec in records
+                  if str(rec.get("source", "")) == source]
+        if not picked:
+            return None
+        return max(picked, key=lambda rec: str(rec.get("as_of", "")))
+
+    stmt = _latest("yfinance.statements")
+    info = _latest("yfinance.info")
+
+    # A historical call without a live dict still enjoys the stored snapshot.
+    if not merged and info is not None:
+        merged = dict(info.get("values") or {})
+
+    if stmt is not None:
+        stmt_values = stmt.get("values") or {}
+        for key in _STATEMENT_RELIABLE_KEYS:
+            value = stmt_values.get(key)
+            if value is None:
+                continue
+            if key == "debtToEquity":
+                merged[key] = value  # provider unit bug: statements wins
+            elif merged.get(key) is None:
+                merged[key] = value
+
+    if info is not None:
+        info_values = info.get("values") or {}
+        for key in _STATEMENT_RELIABLE_KEYS:
+            if merged.get(key) is None and info_values.get(key) is not None:
+                merged[key] = info_values[key]
+
+    # price-sensitive / profile fields come from the live quote when present
+    if info is not None:
+        info_values = info.get("values") or {}
+        for key in ("trailingPE", "forwardPE", "priceToBook", "marketCap",
+                    "enterpriseValue", "sector", "industry",
+                    "heldPercentInsiders", "profitMargins",
+                    "operatingMargins"):
+            value = info_values.get(key)
+            if value is not None:
+                merged[key] = value
+
+    # statements-derived D/E is already correct; normalizing it is a no-op.
+    if "debtToEquity" in merged:
+        merged["debtToEquity"] = normalize_debt_equity(merged["debtToEquity"])
+
+    merged["symbol"] = symbol.replace(".NS", "")
+    merged["data_quality"] = ("statements+live" if (stmt and info)
+                              else ("statements" if stmt else "live_info"))
+    as_of_dates = [str(rec.get("as_of", ""))[:10] for rec in records
+                   if rec.get("as_of")]
+    if as_of_dates:
+        merged["snapshot_as_of"] = max(as_of_dates)
+    return merged
 
 
 def apply_price_valuation(fundamentals: dict, close_price) -> dict:

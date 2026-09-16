@@ -27,6 +27,7 @@ STYLE_MAX_HOLD_BARS = {
 }
 # SQLite store for the decision journal (kept under CACHE_DIR, gitignored).
 JOURNAL_DB_PATH = os.path.join(CACHE_DIR, "decision_journal.sqlite")
+TRADING_DB_PATH = os.path.join(CACHE_DIR, "trading.sqlite")
 
 # ── Risk & validation ─────────────────────────────────────────────
 MIN_QUANTITY = 1
@@ -207,3 +208,19 @@ NSE_HOLIDAYS_2026 = {
     "2026-11-10",  # Diwali Balipratipada
     "2026-12-25",  # Christmas
 }
+
+# ── Execution / broker ─────────────────────────────────────────
+# Execution backend used by brokers.factory.get_broker(). "paper" is the
+# default deterministic simulator; "zerodha" activates the Kite Connect
+# adapter (requires kiteconnect + KITE_API_KEY/KITE_ACCESS_TOKEN in .env).
+BROKER = "paper"
+PAPER_INITIAL_CASH = 100000.0
+
+# ── Risk circuit breaker (automation kill-switch) ──────────────
+# Consulted before every automated order (see circuit_breaker.py). When a
+# daily loss or portfolio drawdown breaches these floors, fresh BUYs are
+# suppressed and a Telegram alert is raised, matching the fail-closed
+# philosophy used by the market-regime filter.
+CIRCUIT_BREAKER_STATE_PATH = os.path.join(CACHE_DIR, "circuit_breaker_state.json")
+MAX_DAILY_LOSS_PCT = 2.0        # stop automated buying after -2% portfolio day
+MAX_DRAWDOWN_PCT = 15.0         # stop automated buying after -15% from peak

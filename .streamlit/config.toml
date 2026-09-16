@@ -1,0 +1,12 @@
+# Aurora Terminal theme — matches dashboard.py embedded design system.
+# Prevents the white-flash before CSS loads and aligns native widgets
+# (selectboxes, popovers, progress, scrollbars) with the custom palette.
+[theme]
+base = "dark"
+primaryColor = "#22d3ee"
+backgroundColor = "#070b11"
+secondaryBackgroundColor = "#0d131c"
+textColor = "#e6edf6"
+
+[browser]
+gatherUsageStats = false

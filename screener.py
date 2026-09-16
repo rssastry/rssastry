@@ -16,7 +16,7 @@ import json
 import os
 from collections import Counter
 import strategies
-from fundamental_snapshots import resolve_provider_ticker
+from fundamental_snapshots import resolve_provider_ticker, merge_fundamental_snapshots
 
 warnings.filterwarnings("ignore")
 
@@ -1161,18 +1161,24 @@ class StockScreener:
             except Exception:
                 continue
 
-            # fetch fundamentals (yfinance.info) once per symbol and compute strategy scores
+            # fetch fundamentals (yfinance.info) once per symbol and compute strategy scores.
+            # The live-info dict is unit-broken for `debtToEquity` on NSE tickers and often
+            # drops ROE/ROCE/FCF, so the deterministic gate and quality scorers consume the
+            # BEST-AVAILABLE merge: unit-correct annual-statement quality metrics + fresh
+            # live valuation (P/E, P/B, sector). No threshold is relaxed — only the data.
             try:
                 ticker_obj = yf.Ticker(resolve_provider_ticker(symbol))
-                fundamentals = ticker_obj.info or {}
+                live_info = ticker_obj.info or {}
             except Exception:
-                fundamentals = {}
+                live_info = {}
 
             try:
                 from fundamental_snapshots import record_snapshot
-                record_snapshot(symbol, fundamentals)
+                record_snapshot(symbol, live_info)
             except Exception:
                 pass
+
+            fundamentals = merge_fundamental_snapshots(symbol, live_info)
 
             sector = (fundamentals.get('sector') or '')
 

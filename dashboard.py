@@ -27,236 +27,416 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+/* ────────────────────────────────────────────────────────────────
+   Aurora Terminal — premium design system for AI Stock Analyst
+   Palette: deep-space base, electric cyan→indigo brand accent,
+   mint (buy) / coral (sell) / amber (hold) semantic colors.
+   ──────────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* Global */
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.main { background: #0d1117; }
-[data-testid="stAppViewContainer"] { background: #0d1117; }
+:root {
+    --bg:            #070b11;
+    --surface:       #0d131c;
+    --surface-2:     #111a26;
+    --surface-3:     #17212f;
+    --border:        rgba(148, 163, 184, 0.12);
+    --border-strong: rgba(120, 160, 210, 0.22);
+    --text:          #e6edf6;
+    --text-2:        #9fb3c8;
+    --text-3:        #73879c;
+    --brand-1:       #22d3ee;  /* cyan  */
+    --brand-2:       #818cf8;  /* indigo */
+    --mint:          #2dd4bf;
+    --green:         #34d399;
+    --danger:        #fb7185;
+    --amber:         #fbbf24;
+    --blue:          #60a5fa;
+    --radius:        14px;
+    --radius-sm:     9px;
+    --mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+/* ── Global canvas ─────────────────────────────────────────── */
+html, body, [class*="css"], [data-testid="stAppViewContainer"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(1100px 520px at 12% -8%, rgba(34, 211, 238, 0.075), transparent 62%),
+        radial-gradient(900px 480px at 96% 108%, rgba(129, 140, 248, 0.065), transparent 60%),
+        linear-gradient(180deg, #0a1019 0%, var(--bg) 40%);
+}
+[data-testid="stHeader"] { background: transparent; }
+.block-container { padding-top: 2.2rem; padding-bottom: 4rem; max-width: 1240px; }
+
+/* ── Sidebar ───────────────────────────────────────────────── */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
-    border-right: 1px solid #21262d;
+    background: linear-gradient(185deg, #0c121b 0%, #080c12 100%);
+    border-right: 1px solid var(--border);
+    backdrop-filter: blur(8px);
 }
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] > p { margin-bottom: 0; }
 
-/* Sidebar title */
+.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.brand-logo {
+    width: 40px; height: 40px; border-radius: 12px; flex: 0 0 40px;
+    display: grid; place-items: center; font-size: 20px;
+    background: linear-gradient(135deg, rgba(34,211,238,.16), rgba(129,140,248,.16));
+    border: 1px solid rgba(120,160,210,.28);
+    box-shadow: 0 6px 18px rgba(34,211,238,.12), inset 0 0 12px rgba(34,211,238,.08);
+}
+.brand-text { line-height: 1.25; }
 .sidebar-title {
-    font-size: 22px;
-    font-weight: 700;
-    background: linear-gradient(135deg, #00d4aa, #0099ff);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 4px;
+    font-size: 17px; font-weight: 800; letter-spacing: -0.01em;
+    background: linear-gradient(120deg, #7df3ff 0%, #9aa5ff 55%, #c7d2fe 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
-.sidebar-sub {
-    font-size: 11px;
-    color: #6e7681;
-    margin-bottom: 16px;
+.sidebar-sub { font-size: 11px; color: var(--text-3); letter-spacing: .02em; }
+.brand-status {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 10px; font-weight: 600; letter-spacing: .12em; color: var(--mint);
+    background: rgba(45,212,191,.08); border: 1px solid rgba(45,212,191,.2);
+    padding: 4px 10px; border-radius: 999px; margin-bottom: 2px;
 }
+.live-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--mint);
+    box-shadow: 0 0 8px var(--mint); animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .45; transform: scale(.82);} }
 
-/* Metric cards */
-.metric-card {
-    background: linear-gradient(135deg, #161b22, #1c2128);
-    border: 1px solid #21262d;
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin: 6px 0;
-    transition: all 0.2s ease;
+/* Sidebar section headers + widgets */
+[data-testid="stSidebar"] .section-header {
+    color: var(--text-3); border-color: var(--border);
 }
-.metric-card:hover { border-color: #00d4aa44; transform: translateY(-1px); }
-.metric-label { font-size: 11px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.8px; }
-.metric-value { font-size: 24px; font-weight: 700; color: #e6edf3; margin: 4px 0; }
-.metric-sub   { font-size: 12px; color: #6e7681; }
+[data-testid="stSidebar"] [data-testid="stNumberInput"] input,
+[data-testid="stSidebar"] [data-testid="stTextInput"] input { font-family: var(--mono); }
 
-/* Stock cards */
-.stock-card {
-    background: linear-gradient(135deg, #161b22, #1c2128);
-    border: 1px solid #21262d;
-    border-radius: 16px;
-    padding: 20px 24px;
-    margin: 12px 0;
-    transition: all 0.2s ease;
-}
-.stock-card:hover { border-color: #00d4aa55; box-shadow: 0 4px 24px #00d4aa11; }
-
-/* Badges */
-.badge-buy  { background: #00d4aa22; color: #00d4aa; border: 1px solid #00d4aa44;
-              padding: 4px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
-.badge-sell { background: #ff4b4b22; color: #ff4b4b; border: 1px solid #ff4b4b44;
-              padding: 4px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
-.badge-hold { background: #ffa50022; color: #ffa500; border: 1px solid #ffa50044;
-              padding: 4px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
-.badge-high   { background: #ff4b4b22; color: #ff4b4b; border: 1px solid #ff4b4b44;
-                padding: 2px 10px; border-radius: 12px; font-size: 11px; }
-.badge-medium { background: #ffa50022; color: #ffa500; border: 1px solid #ffa50044;
-                padding: 2px 10px; border-radius: 12px; font-size: 11px; }
-.badge-low    { background: #00d4aa22; color: #00d4aa; border: 1px solid #00d4aa44;
-                padding: 2px 10px; border-radius: 12px; font-size: 11px; }
-
-/* Signal pills */
-.signal-pill {
-    display: inline-block;
-    background: #21262d;
-    border: 1px solid #30363d;
-    border-radius: 20px;
-    padding: 3px 12px;
-    font-size: 11px;
-    color: #8b949e;
-    margin: 2px 3px;
-}
-
-/* Price levels */
-.price-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 0;
-    border-bottom: 1px solid #21262d;
-}
-.price-label { font-size: 12px; color: #6e7681; }
-.price-val-green { font-size: 16px; font-weight: 600; color: #00d4aa; }
-.price-val-red   { font-size: 16px; font-weight: 600; color: #ff4b4b; }
-.price-val-blue  { font-size: 16px; font-weight: 600; color: #58a6ff; }
-.price-val-white { font-size: 16px; font-weight: 600; color: #e6edf3; }
-
-/* Confidence bar */
-.conf-bar-bg {
-    background: #21262d;
-    border-radius: 6px;
-    height: 8px;
-    margin: 8px 0;
-    overflow: hidden;
-}
-.conf-bar-fill {
-    height: 8px;
-    border-radius: 6px;
-    background: linear-gradient(90deg, #00d4aa, #0099ff);
-}
-
-/* Section headers */
-.section-header {
-    font-size: 13px;
-    font-weight: 600;
-    color: #6e7681;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin: 16px 0 8px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid #21262d;
-}
-
-/* Portfolio table */
-.port-row-green { color: #00d4aa; font-weight: 600; }
-.port-row-red   { color: #ff4b4b; font-weight: 600; }
-
-/* Page title */
-.page-title {
-    font-size: 28px;
-    font-weight: 700;
-    color: #e6edf3;
-    margin-bottom: 4px;
-}
-.page-sub {
-    font-size: 13px;
-    color: #6e7681;
-    margin-bottom: 24px;
-}
-
-/* Action buttons */
-.stButton > button {
-    background: linear-gradient(135deg, #00d4aa22, #0099ff22);
-    border: 1px solid #00d4aa44;
-    color: #00d4aa;
-    border-radius: 8px;
-    font-weight: 500;
-    transition: all 0.2s;
-    width: 100%;
-}
-.stButton > button:hover {
-    background: linear-gradient(135deg, #00d4aa44, #0099ff44);
-    border-color: #00d4aa;
-    color: #fff;
-}
-
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] { background: #161b22; border-radius: 10px; padding: 4px; }
-.stTabs [data-baseweb="tab"] { border-radius: 8px; color: #6e7681; }
-.stTabs [aria-selected="true"] { background: #21262d; color: #e6edf3; }
-
-/* Sidebar radio buttons */
+/* Nav (radio) — pill style */
+[data-testid="stRadio"] > div { gap: 4px; }
 [data-testid="stRadio"] label {
-    color: #6e7681 !important;
-    font-size: 14px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    transition: all 0.2s;
+    color: var(--text-2) !important; font-size: 13.5px; font-weight: 500;
+    padding: 9px 12px; border-radius: 10px; transition: all .18s ease;
+    border: 1px solid transparent;
 }
 [data-testid="stRadio"] label:hover {
-    color: #e6edf3 !important;
-    background: #21262d;
+    color: var(--text) !important;
+    background: rgba(148,163,184,.07);
 }
-[data-testid="stRadio"] [aria-checked="true"] + div,
-[data-testid="stRadio"] [aria-checked="true"] ~ div label,
-[data-testid="stRadio"] div[data-testid="stMarkdownContainer"] {
-    color: #e6edf3 !important;
+[data-testid="stRadio"] div[role="radiogroup"] label[data-baseweb="radio"] > div:first-child {
+    display: none;  /* hide native dot; pill highlight remains */
 }
-[data-testid="stRadio"] [data-baseweb="radio"] [aria-checked="true"] ~ div {
-    color: #00d4aa !important;
-    font-weight: 600;
+[data-testid="stRadio"] label:has(input:checked) {
+    color: #081018 !important;
+    background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+    box-shadow: 0 4px 16px rgba(34,211,238,.22);
+    border-color: transparent !important;
+    font-weight: 700;
 }
-div[role="radiogroup"] label[data-baseweb="radio"] > div:first-child {
-    border-color: #00d4aa !important;
-    background: #00d4aa !important;
+/* ── Page title & section headers ─────────────────────────── */
+.page-title {
+    font-size: 30px; font-weight: 800; letter-spacing: -0.025em;
+    color: var(--text); margin-bottom: 6px;
+    background: linear-gradient(120deg, #f0f6ff 0%, #bcd3ff 70%, #8ee9ff 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    display: inline-block;
 }
-            
-            
-/* Expander */
-[data-testid="stExpander"] {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 12px;
-    margin: 8px 0;
+.page-sub { font-size: 13px; color: var(--text-3); margin-bottom: 22px; }
+.section-header {
+    font-size: 11.5px; font-weight: 700; letter-spacing: .14em;
+    color: var(--text-3); text-transform: uppercase;
+    margin: 20px 0 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+}
+.section-header::before {
+    content: ""; width: 16px; height: 2px; border-radius: 2px;
+    background: linear-gradient(90deg, var(--brand-1), var(--brand-2));
 }
 
-/* Metrics */
+/* ── Metric cards ─────────────────────────────────────────── */
+.metric-card {
+    position: relative; overflow: hidden;
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px 16px; margin: 6px 0;
+    transition: all .22s ease;
+}
+.metric-card::after {
+    content: ""; position: absolute; inset: 0 auto auto 0; width: 100%; height: 2px;
+    background: linear-gradient(90deg, var(--brand-1), var(--brand-2));
+    opacity: .78;
+}
+.metric-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-strong);
+    box-shadow: 0 12px 30px rgba(10,20,40,.5), 0 2px 10px rgba(34,211,238,.06);
+}
+.metric-label {
+    font-size: 10.5px; font-weight: 600; color: var(--text-3);
+    text-transform: uppercase; letter-spacing: .12em;
+}
+.metric-value { font-size: 27px; font-weight: 800; color: var(--text); margin: 6px 0 2px; font-family: var(--mono); }
+.metric-sub { font-size: 12px; color: var(--text-3); }
+
+/* Native st.metric */
 [data-testid="stMetric"] {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 10px;
-    padding: 12px 16px;
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px; transition: all .2s ease;
 }
-[data-testid="stMetricLabel"] { color: #6e7681; font-size: 11px; }
-[data-testid="stMetricValue"] { color: #e6edf3; font-size: 20px; font-weight: 700; }
+[data-testid="stMetric"]:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+[data-testid="stMetricLabel"] { color: var(--text-3); font-size: 11px; }
+[data-testid="stMetricValue"] { color: var(--text); font-size: 21px; font-weight: 700; font-family: var(--mono); }
+[data-testid="stMetricDelta"], [data-testid="stMetricDelta"] [data-testid="stIconMaterial"] { color: var(--green); }
+[data-testid="stMetricDelta"].negative, [data-testid="stMetricDelta"] [data-testid="stIconMaterial"].negative { color: var(--danger); }
 
-/* Divider */
-hr { border-color: #21262d; }
+/* ── Stock cards ──────────────────────────────────────────── */
+.stock-card {
+    position: relative; overflow: hidden;
+    background: linear-gradient(165deg, var(--surface-2) 0%, var(--surface) 78%);
+    border: 1px solid var(--border); border-radius: 18px;
+    padding: 22px 26px; margin: 12px 0;
+    transition: all .22s ease;
+}
+.stock-card::before {
+    content: ""; position: absolute; top: -70px; right: -70px; width: 180px; height: 180px;
+    background: radial-gradient(circle, rgba(34,211,238,.1), transparent 70%);
+    pointer-events: none;
+}
+.stock-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(120,160,210,.3);
+    box-shadow: 0 16px 40px rgba(6,12,20,.6), 0 0 0 1px rgba(34,211,238,.05);
+}
+/* ── Badges / pills ───────────────────────────────────────── */
+.badge-buy, .badge-sell, .badge-hold {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 14px; border-radius: 999px;
+    font-size: 12px; font-weight: 700; letter-spacing: .04em;
+    border: 1px solid transparent; backdrop-filter: blur(2px);
+}
+.badge-buy  { color: var(--mint);  background: rgba(45,212,191,.1);  border-color: rgba(45,212,191,.28); }
+.badge-sell { color: var(--danger); background: rgba(251,113,133,.1); border-color: rgba(251,113,133,.28); }
+.badge-hold { color: var(--amber); background: rgba(251,191,36,.09); border-color: rgba(251,191,36,.26); }
+.badge-buy::before, .badge-sell::before, .badge-hold::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+}
+.badge-buy::before  { background: var(--mint);   box-shadow: 0 0 6px var(--mint); }
+.badge-sell::before { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+.badge-hold::before { background: var(--amber);  box-shadow: 0 0 6px var(--amber); }
 
-/* Input fields */
+.badge-high, .badge-medium, .badge-low {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 11px; border-radius: 999px; font-size: 10.5px; font-weight: 600;
+    letter-spacing: .05em; border: 1px solid transparent;
+}
+.badge-high   { color: var(--danger); background: rgba(251,113,133,.1); border-color: rgba(251,113,133,.25); }
+.badge-medium { color: var(--amber);  background: rgba(251,191,36,.09); border-color: rgba(251,191,36,.22); }
+.badge-low    { color: var(--mint);   background: rgba(45,212,191,.1);  border-color: rgba(45,212,191,.25); }
+
+.signal-pill {
+    display: inline-block; background: var(--surface-3);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 12px; font-size: 11px; color: var(--text-2); margin: 2px 3px;
+}
+
+/* ── Price rows ───────────────────────────────────────────── */
+.price-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 11px 2px; border-bottom: 1px solid var(--border);
+}
+.price-label { font-size: 12px; color: var(--text-3); }
+.price-val-green { font-size: 16px; font-weight: 600; color: var(--mint); font-family: var(--mono); }
+.price-val-red   { font-size: 16px; font-weight: 600; color: var(--danger); font-family: var(--mono); }
+.price-val-blue  { font-size: 16px; font-weight: 600; color: var(--blue); font-family: var(--mono); }
+.price-val-white { font-size: 16px; font-weight: 600; color: var(--text); font-family: var(--mono); }
+.port-row-green { color: var(--mint); font-weight: 600; }
+.port-row-red   { color: var(--danger); font-weight: 600; }
+
+/* ── Confidence bar ───────────────────────────────────────── */
+.conf-bar { display: flex; align-items: center; gap: 10px; }
+.conf-bar-bg {
+    flex: 1; height: 8px; border-radius: 999px;
+    background: var(--surface-3); overflow: hidden;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.4);
+}
+.conf-bar-fill {
+    height: 100%; border-radius: 999px; transition: width .5s ease;
+    box-shadow: 0 0 12px rgba(34,211,238,.4);
+    position: relative; overflow: hidden;
+}
+.conf-bar-fill::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,.28) 50%, transparent 80%);
+    transform: translateX(-100%); animation: shimmer 2.6s ease-in-out infinite;
+}
+@keyframes shimmer { 0% { transform: translateX(-100%); } 60%,100% { transform: translateX(100%); } }
+.conf-bar-pct {
+    min-width: 38px; text-align: right;
+    font-size: 12px; font-weight: 700; color: var(--text-2); font-family: var(--mono);
+}
+/* ── Buttons ──────────────────────────────────────────────── */
+.stButton > button {
+    background: linear-gradient(135deg, rgba(34,211,238,.12), rgba(129,140,248,.12));
+    border: 1px solid rgba(120,160,210,.28);
+    color: var(--text); border-radius: var(--radius-sm);
+    font-weight: 600; letter-spacing: .01em;
+    transition: all .18s ease; width: 100%;
+}
+.stButton > button:hover {
+    border-color: var(--brand-1);
+    color: #fff;
+    background: linear-gradient(135deg, rgba(34,211,238,.2), rgba(129,140,248,.2));
+    box-shadow: 0 6px 18px rgba(34,211,238,.14);
+    transform: translateY(-1px);
+}
+.stButton > button:active { transform: translateY(0); }
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+    border: none; color: #081018; font-weight: 700;
+    box-shadow: 0 6px 20px rgba(34,211,238,.25);
+}
+.stButton > button[kind="primary"]:hover { filter: brightness(1.08); box-shadow: 0 8px 24px rgba(34,211,238,.35); }
+
+/* ── Tabs ─────────────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 5px; gap: 4px;
+}
+.stTabs [data-baseweb="tab"] { border-radius: 9px; color: var(--text-2); font-weight: 500; padding: 7px 16px; }
+.stTabs [data-baseweb="tab"]:hover { color: var(--text); background: rgba(148,163,184,.08); }
+.stTabs [aria-selected="true"] {
+    color: #081018 !important; font-weight: 700;
+    background: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+    border-radius: 9px;
+}
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
+.stTabs [data-baseweb="tab-panel"] { padding-top: 18px; }
+
+/* ── Expander ─────────────────────────────────────────────── */
+[data-testid="stExpander"] {
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--border); border-radius: var(--radius);
+    margin: 10px 0; overflow: hidden; transition: border-color .2s ease;
+}
+[data-testid="stExpander"]:hover { border-color: var(--border-strong); }
+[data-testid="stExpander"] summary { font-weight: 600; color: var(--text); }
+[data-testid="stExpander"] svg { color: var(--brand-1); }
+[data-testid="stExpander"] [data-testid="stExpanderDetails"] { padding-top: 6px; }
+
+/* ── Inputs ───────────────────────────────────────────────── */
 [data-testid="stTextInput"] input,
 [data-testid="stNumberInput"] input,
-[data-testid="stSelectbox"] {
-    background: #21262d;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    color: #e6edf3;
+[data-testid="stSelectbox"] > div,
+[data-testid="stMultiselect"] > div,
+[data-testid="stTextArea"] textarea {
+    background-color: var(--surface-2);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text); transition: border-color .18s ease, box-shadow .18s ease;
+}
+[data-testid="stTextInput"]:focus-within input,
+[data-testid="stNumberInput"]:focus-within input,
+[data-testid="stSelectbox"]:focus-within > div,
+[data-testid="stTextArea"]:focus-within textarea {
+    border-color: var(--brand-1); box-shadow: 0 0 0 3px rgba(34,211,238,.12);
+}
+[data-testid="stSelectbox"] [data-baseweb="select"] > div { background: transparent; }
+[data-testid="stBaseButton-secondary"] { color: var(--text-2); }
+input::placeholder, textarea::placeholder { color: var(--text-3); }
+
+/* ── Alert / status messages ──────────────────────────────── */
+[data-testid="stAlert"] {
+    border-radius: var(--radius-sm); border-width: 1px;
+    background-color: var(--surface-2) !important;
+}
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"] { color: var(--text-2); }
+[data-testid="stAlert"][data-baseweb="notification"][kind="success"] { border-color: rgba(45,212,191,.35); }
+[data-testid="stAlert"][data-baseweb="notification"][kind="warning"] { border-color: rgba(251,191,36,.35); }
+[data-testid="stAlert"][data-baseweb="notification"][kind="error"] { border-color: rgba(251,113,133,.35); }
+[data-testid="stAlert"][data-baseweb="notification"][kind="info"] { border-color: rgba(96,165,250,.35); }
+[data-testid="stStatusWidget"] { background: var(--surface-2); border-color: var(--border); }
+
+/* ── Dataframe ────────────────────────────────────────────── */
+[data-testid="stDataFrame"] {
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+}
+[data-testid="stDataFrame"] { background: var(--surface); }
+
+/* ── Progress & caption ───────────────────────────────────── */
+[data-testid="stProgress"] > div > div > div > div { background: linear-gradient(90deg, var(--brand-1), var(--brand-2)); }
+.stCaption, [data-testid="stCaptionContainer"] p { color: var(--text-3); }
+
+/* ── Charts ───────────────────────────────────────────────── */
+[data-testid="stPlotlyChart"] {
+    border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+    background: var(--surface);
+}
+[data-testid="stPlotlyChart"] svg { border-radius: 14px; }
+
+/* ── Misc chrome ──────────────────────────────────────────── */
+hr { border-color: rgba(148,163,184,.12); }
+h1, h2, h3 { color: var(--text); letter-spacing: -0.01em; }
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li { color: var(--text-2); }
+[data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label { color: var(--text-3); font-size: 13px; }
+code { background: var(--surface-3); color: #9ee7ff; border-radius: 6px; }
+a { color: var(--blue); }
+
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #233446; }
+
+/* Keys / dialog refinements */
+[data-testid="stPopover"] > div, [data-testid="stDialog"] > div {
+    background: var(--surface-2); border-color: var(--border); border-radius: 14px;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #0d1117; }
-::-webkit-scrollbar-thumb { background: #21262d; border-radius: 3px; }
-  /* Active nav item */
-[data-testid="stRadio"] > div > div > label > div:last-child {
-    color: #8b949e;
+/* ── Hero band ─────────────────────────────────────────────── */
+.hero {
+    position: relative; overflow: hidden; border-radius: 18px;
+    padding: 22px 26px; margin-bottom: 24px;
+    background: linear-gradient(135deg, rgba(34,211,238,.10), rgba(129,140,248,.10) 55%, rgba(13,19,28,.5));
+    border: 1px solid var(--border-strong);
 }
-[data-testid="stRadio"] > div > div:has(input:checked) > label > div:last-child {
-    color: #00d4aa !important;
-    font-weight: 600;
+.hero::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+        radial-gradient(620px 200px at 88% -30%, rgba(129,140,248,.18), transparent 60%),
+        radial-gradient(520px 190px at 4% 120%, rgba(34,211,238,.12), transparent 55%);
 }
-/* Radio dot color */
-input[type="radio"]:checked + div {
-    background-color: #00d4aa !important;
-    border-color: #00d4aa !important;
-}          
+.hero-grid {
+    position: relative; display: grid; grid-template-columns: 1.35fr 1fr;
+    gap: 24px; align-items: center;
+}
+@media (max-width: 900px) { .hero-grid { grid-template-columns: 1fr; } }
+.hero-label {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--text-3);
+}
+.hero-value {
+    font-size: 30px; font-weight: 800; color: var(--text);
+    font-family: var(--mono); margin: 2px 0;
+}
+.hero-sub { font-size: 12px; color: var(--text-3); }
+.hero-chart-head {
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--text-3); margin-bottom: 8px;
+}
+.spark-wrap {
+    border-radius: 13px; padding: 12px 14px 10px;
+    background: rgba(7,11,17,.5); border: 1px solid var(--border);
+}
+.hero-foot {
+    position: relative; display: flex; gap: 22px; flex-wrap: wrap;
+    margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-3);
+}
+.hero-foot .hf { display: inline-flex; align-items: center; gap: 7px; }
+.hero-foot .live-dot { flex: 0 0 auto; }
+.hero-foot b { color: var(--text-2); font-weight: 600; }
 
 </style>
 """, unsafe_allow_html=True)
@@ -279,6 +459,51 @@ def load_json(path):
     except json.JSONDecodeError:
         st.warning(f"{path} is corrupted. Re-run the analysis.")
         return {}
+
+
+
+def nifty_sparkline_svg(width=260, height=60):
+    """Inline-SVG NIFTY sparkline from local price data (no network)."""
+    try:
+        from price_store import load_adjusted
+        df = load_adjusted("^NSEI", period="6mo", interval="1d")
+        if df is None or len(df) < 10:
+            raise ValueError("insufficient NIFTY history")
+        close = df["Close"].astype(float).dropna().values[-120:]
+        n = len(close)
+        lo, hi = float(close.min()), float(close.max())
+        span = (hi - lo) or 1e-9
+        pts = []
+        for k, v in enumerate(close):
+            x = (k / (n - 1)) * width
+            y = height - ((float(v) - lo) / span) * (height - 6) - 3
+            pts.append(f"{x:.1f},{y:.1f}")
+        d = "M " + " L ".join(pts)
+        color = "#2dd4bf" if close[-1] >= close[0] else "#fb7185"
+        return (
+            f'<div class="spark-wrap">'
+            f'<div class="hero-chart-head">NIFTY 50 \u00b7 {n} sessions</div>'
+            f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" '
+            f'style="width:100%;height:72px;display:block">'
+            f'<defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">'
+            f'<stop offset="0%" stop-color="{color}" stop-opacity=".30"/>'
+            f'<stop offset="100%" stop-color="{color}" stop-opacity="0"/>'
+            f'</linearGradient></defs>'
+            f'<path d="{d} L {width},{height} L 0,{height} Z" fill="url(#sparkFill)" stroke="none"/>'
+            f'<path d="{d}" fill="none" stroke="{color}" stroke-width="2.2" '
+            f'stroke-linecap="round" stroke-linejoin="round"/>'
+            f'</svg>'
+            f'<div style="display:flex;justify-content:space-between;'
+            f'font-family:var(--mono);font-size:11px;color:var(--text-3);padding-top:6px">'
+            f'<span>{close[0]:,.0f}</span><span>{close[-1]:,.0f}</span></div>'
+            f'</div>'
+        )
+    except Exception:
+        return (
+            '<div class="spark-wrap"><div class="hero-chart-head">NIFTY 50</div>'
+            '<div style="font-size:12px;color:var(--text-3);padding:18px 2px">'
+            'Index sparkline unavailable - refresh price files</div></div>'
+        )
 
 
 def get_live_price(symbol):
@@ -386,7 +611,7 @@ def validate_manual_analysis_buy(indicators, symbol, style, ai_recommendation):
                         ALLOW_DAILY_BAR_INTRADAY_BUY)
     from screener import (StockScreener, check_market_regime,
                           fundamental_buy_gate, market_regime_blocks_buy)
-    from fundamental_snapshots import resolve_provider_ticker
+    from fundamental_snapshots import resolve_provider_ticker, merge_fundamental_snapshots
     import strategies
 
     failures = []
@@ -406,7 +631,11 @@ def validate_manual_analysis_buy(indicators, symbol, style, ai_recommendation):
 
     try:
         provider_symbol = resolve_provider_ticker(symbol)
-        fundamentals = yf.Ticker(provider_symbol).info or {}
+        # live info is unit-broken for NSE debtToEquity and often drops
+        # ROE/ROCE/FCF -> consume the best-available merged fundamentals.
+        raw_info = yf.Ticker(provider_symbol).info or {}
+        local_sym = symbol if symbol.endswith(".NS") else symbol + ".NS"
+        fundamentals = merge_fundamental_snapshots(local_sym, raw_info)
         sector = fundamentals.get("sector") or ""
         scores = [
             strategies.score_buffett(indicators, fundamentals, sector=sector)[0],
@@ -465,14 +694,14 @@ def candlestick_chart(symbol, period="30d"):
         fig.add_trace(go.Candlestick(
             x=df.index, open=df["Open"], high=df["High"],
             low=df["Low"],  close=df["Close"],
-            increasing_line_color="#00d4aa",
-            increasing_fillcolor="#00d4aa33",
-            decreasing_line_color="#ff4b4b",
-            decreasing_fillcolor="#ff4b4b33",
+            increasing_line_color="#2dd4bf",
+            increasing_fillcolor="#2dd4bf33",
+            decreasing_line_color="#fb7185",
+            decreasing_fillcolor="#fb718533",
             name=symbol
         ))
         # Add volume bars
-        colors = ["#00d4aa44" if c >= o else "#ff4b4b44"
+        colors = ["#2dd4bf44" if c >= o else "#fb718544"
                   for c, o in zip(df["Close"], df["Open"])]
         fig.add_trace(go.Bar(
             x=df.index, y=df["Volume"],
@@ -483,18 +712,18 @@ def candlestick_chart(symbol, period="30d"):
         ))
         fig.update_layout(
             template="plotly_dark",
-            paper_bgcolor="#161b22",
-            plot_bgcolor="#161b22",
+            paper_bgcolor="#0d131c",
+            plot_bgcolor="#0d131c",
             height=380,
             margin=dict(l=10, r=10, t=30, b=10),
             xaxis_rangeslider_visible=False,
             showlegend=False,
-            xaxis=dict(gridcolor="#21262d", showgrid=True),
-            yaxis=dict(gridcolor="#21262d", showgrid=True, side="right"),
+            xaxis=dict(gridcolor="#1c2733", showgrid=True),
+            yaxis=dict(gridcolor="#1c2733", showgrid=True, side="right"),
             yaxis2=dict(overlaying="y", side="left",
                         showgrid=False, showticklabels=False,
                         range=[0, df["Volume"].max() * 5]),
-            font=dict(family="Inter", color="#8b949e"),
+            font=dict(family="Inter", color="#9fb3c8"),
         )
         return fig
     except Exception:
@@ -502,13 +731,24 @@ def candlestick_chart(symbol, period="30d"):
 
 
 def confidence_bar(score):
-    color = "#00d4aa" if score >= 70 else "#ffa500" if score >= 50 else "#ff4b4b"
+    try:
+        s = max(0.0, min(100.0, float(score)))
+    except (TypeError, ValueError):
+        s = 0.0
+    if s >= 70:
+        c1, c2 = "#2dd4bf", "#22d3ee"
+    elif s >= 50:
+        c1, c2 = "#fbbf24", "#fb923c"
+    else:
+        c1, c2 = "#fb7185", "#f87171"
     return f"""
-    <div class="conf-bar-bg">
-        <div class="conf-bar-fill" style="width:{score}%; background: linear-gradient(90deg, {color}, {color}99);"></div>
+    <div class="conf-bar">
+        <div class="conf-bar-bg">
+            <div class="conf-bar-fill" style="width:{s:.1f}%; background: linear-gradient(90deg, {c1}, {c2});"></div>
+        </div>
+        <span class="conf-bar-pct">{s:.1f}%</span>
     </div>
     """
-
 
 def risk_badge(risk):
     cls = {"Low": "badge-low", "Medium": "badge-medium", "High": "badge-high"}.get(risk, "badge-medium")
@@ -624,8 +864,16 @@ def explain_pick(obj):
 # SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="sidebar-title">📈 AI Stock Analyst</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="sidebar-sub">NSE/BSE • {datetime.now().strftime("%d %b %Y, %H:%M")}</div>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="brand">
+        <div class="brand-logo">📈</div>
+        <div class="brand-text">
+            <div class="sidebar-title">AI Stock Analyst</div>
+            <div class="sidebar-sub">NSE/BSE • {datetime.now().strftime('%d %b %Y, %H:%M')}</div>
+        </div>
+    </div>
+    <div class="brand-status"><span class="live-dot"></span> SYSTEM ONLINE</div>
+""", unsafe_allow_html=True)
     st.divider()
 
     # build page list and include dynamic pages if report files exist
@@ -730,7 +978,7 @@ with st.sidebar:
             mt = os.path.getmtime(f)
             ts = datetime.fromtimestamp(mt).strftime("%H:%M")
         st.markdown(
-            f'<div style="font-size:12px; color:#6e7681; padding:2px 0;">'
+            f'<div style="font-size:12px; color:#73879c; padding:2px 0;">'
             f'{dot} {label} {"• " + ts if ts else "• missing"}</div>',
             unsafe_allow_html=True
         )
@@ -760,36 +1008,48 @@ if "Dashboard" in page:
     if all_picks:
         avg_conf = round(sum(p.get("confidence_score",0) for p in all_picks) / len(all_picks))
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">BUY Signals Today</div>
-            <div class="metric-value" style="color:#00d4aa">{total_buys}</div>
-            <div class="metric-sub">Across all styles</div>
-        </div>""", unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Avg Confidence</div>
-            <div class="metric-value" style="color:#58a6ff">{avg_conf}%</div>
-            <div class="metric-sub">AI score</div>
-        </div>""", unsafe_allow_html=True)
-    with c3:
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Holdings</div>
-            <div class="metric-value" style="color:#ffa500">{len(holdings)}</div>
-            <div class="metric-sub">Active positions</div>
-        </div>""", unsafe_allow_html=True)
-    with c4:
-        last_scan = data.get("date", "Never")
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">Last Scan</div>
-            <div class="metric-value" style="font-size:18px; color:#e6edf3">{last_scan}</div>
-            <div class="metric-sub">Analysis date</div>
-        </div>""", unsafe_allow_html=True)
+    # ── Hero band: market pulse + NIFTY sparkline ────────
+    last_scan = data.get("date", "Never")
+    hero_spark = nifty_sparkline_svg()
+    _snap = load_json("market_snapshot.json")
+    _breadth = _snap.get("breadth") or {}
+    _vreg = _snap.get("volatility_regime") or {}
+    _b50 = _breadth.get("breadth_pct_above_ema50")
+    breadth_txt = f"{float(_b50):.0f}% above EMA50" if _b50 is not None else "n/a"
+    vol_txt = _vreg.get("regime", "n/a")
+
+    st.markdown(f"""
+    <div class="hero">
+      <div class="hero-grid">
+        <div>
+          <div class="hero-label" style="margin-bottom:12px">Market Pulse</div>
+          <div style="display:flex;gap:30px;flex-wrap:wrap">
+            <div class="hero-cell">
+              <div class="hero-label">BUY Signals</div>
+              <div class="hero-value" style="color:#2dd4bf">{total_buys}</div>
+              <div class="hero-sub">across all styles</div>
+            </div>
+            <div class="hero-cell">
+              <div class="hero-label">Avg Confidence</div>
+              <div class="hero-value" style="color:#60a5fa">{avg_conf}%</div>
+              <div class="hero-sub">AI ensemble score</div>
+            </div>
+            <div class="hero-cell">
+              <div class="hero-label">Active Holdings</div>
+              <div class="hero-value" style="color:#fbbf24">{len(holdings)}</div>
+              <div class="hero-sub">positions in portfolio</div>
+            </div>
+          </div>
+        </div>
+        <div>{hero_spark}</div>
+      </div>
+      <div class="hero-foot">
+        <span class="hf"><span class="live-dot"></span>Last scan: <b>{last_scan}</b></span>
+        <span class="hf">Volatility: <b>{vol_txt}</b></span>
+        <span class="hf">Breadth: <b>{breadth_txt}</b></span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -853,16 +1113,16 @@ if "Dashboard" in page:
                 labels=list(style_counts.keys()),
                 values=list(style_counts.values()),
                 hole=0.6,
-                marker_colors=["#00d4aa","#0099ff","#ffa500"],
+                marker_colors=["#2dd4bf","#818cf8","#fbbf24"],
             ))
             fig.update_layout(
                 template="plotly_dark",
-                paper_bgcolor="#161b22",
-                plot_bgcolor="#161b22",
+                paper_bgcolor="#0d131c",
+                plot_bgcolor="#0d131c",
                 height=220,
                 margin=dict(l=10,r=10,t=10,b=10),
                 showlegend=True,
-                legend=dict(font=dict(color="#8b949e", size=11)),
+                legend=dict(font=dict(color="#9fb3c8", size=11)),
                 font=dict(family="Inter"),
             )
             st.plotly_chart(fig, width="stretch", key="home_pie")
@@ -990,212 +1250,216 @@ elif "Picks" in page:
                 return 0.0
             picks = sorted(picks, key=_sort_val, reverse=(sort_dir == "Descending"))
 
-            for i, p in enumerate(picks, 1):
-                ind  = p.get("indicators", {})
-                ep   = p.get("entry_price", {})
-                tp   = p.get("target_prices", {})
-                ap   = p.get("alert_on_price", {})
-                conf = p.get("confidence_score", 0)
-                sym  = p.get("symbol","")
-                rec  = p.get("recommendation","")
-                risk = p.get("risk_level","Medium")
+            for _r in range(0, len(picks), 2):
+                _cols = st.columns(2)
+                for _off, p in enumerate(picks[_r:_r + 2], 1):
+                    i = _r + _off
+                    with _cols[_off - 1]:
+                        ind  = p.get("indicators", {})
+                        ep   = p.get("entry_price", {})
+                        tp   = p.get("target_prices", {})
+                        ap   = p.get("alert_on_price", {})
+                        conf = p.get("confidence_score", 0)
+                        sym  = p.get("symbol","")
+                        rec  = p.get("recommendation","")
+                        risk = p.get("risk_level","Medium")
 
-                with st.expander(
-                    f"#{i}  {sym}  •  ₹{ind.get('current_price','?')}  "
-                    f"•  Confidence {conf}/100  •  R:R→T1 {p.get('risk_reward_t1','?')} / T2 {p.get('risk_reward_ratio','?')}",
-                    expanded=(i == 1 and len(picks) <= 5)
-                ):
-                    # Header row
-                    h1, h2, h3 = st.columns([3,1,1])
-                    with h1:
-                        st.markdown(
-                            f'<span style="font-size:22px; font-weight:700; color:#e6edf3">{sym}</span>'
-                            f'&nbsp;&nbsp;{rec_badge(rec)}&nbsp;&nbsp;{risk_badge(risk)}',
-                            unsafe_allow_html=True
-                        )
-                        st.markdown(
-                            f'<div style="font-size:13px; color:#8b949e; margin-top:6px;">'
-                            f'{p.get("analysis_summary","")}</div>',
-                            unsafe_allow_html=True
-                        )
-                    with h2:
-                        st.markdown(f'<div class="metric-label">Confidence</div>', unsafe_allow_html=True)
-                        st.markdown(confidence_bar(conf), unsafe_allow_html=True)
-                        st.markdown(f'<div style="font-size:20px; font-weight:700; color:#00d4aa">{conf}/100</div>', unsafe_allow_html=True)
-                    with h3:
-                        st.markdown(f'<div class="metric-label">Hold Duration</div>', unsafe_allow_html=True)
-                        st.markdown(f'<div style="font-size:14px; font-weight:600; color:#e6edf3; margin-top:8px">{p.get("hold_duration","?")}</div>', unsafe_allow_html=True)
+                        with st.expander(
+                            f"#{i}  {sym}  •  ₹{ind.get('current_price','?')}  "
+                            f"•  Confidence {conf}/100  •  R:R→T1 {p.get('risk_reward_t1','?')} / T2 {p.get('risk_reward_ratio','?')}",
+                            expanded=(i == 1 and len(picks) <= 5)
+                        ):
+                            # Header row
+                            h1, h2, h3 = st.columns([3,1,1])
+                            with h1:
+                                st.markdown(
+                                    f'<span style="font-size:22px; font-weight:700; color:#e6edf6">{sym}</span>'
+                                    f'&nbsp;&nbsp;{rec_badge(rec)}&nbsp;&nbsp;{risk_badge(risk)}',
+                                    unsafe_allow_html=True
+                                )
+                                st.markdown(
+                                    f'<div style="font-size:13px; color:#9fb3c8; margin-top:6px;">'
+                                    f'{p.get("analysis_summary","")}</div>',
+                                    unsafe_allow_html=True
+                                )
+                            with h2:
+                                st.markdown(f'<div class="metric-label">Confidence</div>', unsafe_allow_html=True)
+                                st.markdown(confidence_bar(conf), unsafe_allow_html=True)
+                                st.markdown(f'<div style="font-size:20px; font-weight:700; color:#2dd4bf">{conf}/100</div>', unsafe_allow_html=True)
+                            with h3:
+                                st.markdown(f'<div class="metric-label">Hold Duration</div>', unsafe_allow_html=True)
+                                st.markdown(f'<div style="font-size:14px; font-weight:600; color:#e6edf6; margin-top:8px">{p.get("hold_duration","?")}</div>', unsafe_allow_html=True)
 
-                    st.markdown("<br>", unsafe_allow_html=True)
+                            st.markdown("<br>", unsafe_allow_html=True)
 
-                    decision = build_decision_summary(p)
-                    q1, q2, q3, q4 = st.columns(4)
-                    q1.metric("Effective decision", decision["recommendation"])
-                    q2.metric("Evidence conviction", f'{decision["conviction"]}/100' if decision["conviction"] is not None else "N/A")
-                    q3.metric("Data freshness", decision["freshness"]["label"])
-                    q4.metric("Market regime", decision["market_regime"])
-                    if decision["blockers"]:
-                        st.warning("Gate review: " + "; ".join(decision["blockers"][:3]))
-                    else:
-                        st.success("Gate review: no recorded blockers")
+                            decision = build_decision_summary(p)
+                            q1, q2, q3, q4 = st.columns(4)
+                            q1.metric("Effective decision", decision["recommendation"])
+                            q2.metric("Evidence conviction", f'{decision["conviction"]}/100' if decision["conviction"] is not None else "N/A")
+                            q3.metric("Data freshness", decision["freshness"]["label"])
+                            q4.metric("Market regime", decision["market_regime"])
+                            if decision["blockers"]:
+                                st.warning("Gate review: " + "; ".join(decision["blockers"][:3]))
+                            else:
+                                st.success("Gate review: no recorded blockers")
 
-                    # ── Conditions / gate review (live, re-validated) ────────
-                    bb = float(ind.get("bb_pct") or 0)
-                    rsi_v = float(ind.get("rsi") or 0)
-                    win = ind.get("sig_win_pct")
-                    samples = ind.get("sig_samples") or 0
-                    stretched = bb > 1.0 and not p.get("buy_rule_passed")
-                    hot = rsi_v >= 70
-                    fade = win is not None and int(samples) >= 20 and float(win) < 45
-                    issues = []
-                    if stretched:
-                        issues.append(f"Stretched above upper Bollinger (BB% {bb:.2f}) with no EMA-cross confirm — breakout-fade risk")
-                    if hot:
-                        issues.append(f"RSI {rsi_v:.0f} is overbought (≥70)")
-                    if fade:
-                        issues.append(f"Historical fade: setup won next session only {float(win):.0f}% ({samples} samples)")
-                    if p.get("eligibility_failures"):
-                        issues.extend(p.get("eligibility_failures") or [])
-                    if issues:
-                        for _g in issues:
-                            st.warning(f"⚠️ {_g}")
-                    else:
-                        st.success("✅ BUY conditions validated — gate passed, no stretched/fade/exhaustion flags")
-                    st.markdown(
-                        f'<div style="font-size:12px; color:#8b949e">'
-                        f'Signal data as of <b>{ind.get("data_as_of","n/a")}</b> • '
-                        f'setup win-rate <b>{win if win is not None else "n/a"}%</b> over {samples} sessions • '
-                        f'crossover-confirm <b>{"Yes" if p.get("buy_rule_passed") else "No"}</b></div>',
-                        unsafe_allow_html=True
-                    )
-
-                    # Price levels
-                    col_prices, col_chart = st.columns([1, 2])
-                    with col_prices:
-                        st.markdown('<div class="section-header">Price Levels</div>', unsafe_allow_html=True)
-                        levels = [
-                            ("Entry (Ideal)",  f"₹{ep.get('ideal','?')}",       "price-val-blue"),
-                            ("Entry Zone",     f"₹{ep.get('range_low','?')} – ₹{ep.get('range_high','?')}", "price-val-white"),
-                            ("Target 1",       f"₹{tp.get('T1','?')}",          "price-val-green"),
-                            ("Target 2",       f"₹{tp.get('T2','?')}",          "price-val-green"),
-                            ("Target 3",       f"₹{tp.get('T3','?')}",          "price-val-green"),
-                            ("Stop Loss",      f"₹{p.get('stop_loss','?')}",    "price-val-red"),
-                        ]
-                        for label, val, cls in levels:
+                            # ── Conditions / gate review (live, re-validated) ────────
+                            bb = float(ind.get("bb_pct") or 0)
+                            rsi_v = float(ind.get("rsi") or 0)
+                            win = ind.get("sig_win_pct")
+                            samples = ind.get("sig_samples") or 0
+                            stretched = bb > 1.0 and not p.get("buy_rule_passed")
+                            hot = rsi_v >= 70
+                            fade = win is not None and int(samples) >= 20 and float(win) < 45
+                            issues = []
+                            if stretched:
+                                issues.append(f"Stretched above upper Bollinger (BB% {bb:.2f}) with no EMA-cross confirm — breakout-fade risk")
+                            if hot:
+                                issues.append(f"RSI {rsi_v:.0f} is overbought (≥70)")
+                            if fade:
+                                issues.append(f"Historical fade: setup won next session only {float(win):.0f}% ({samples} samples)")
+                            if p.get("eligibility_failures"):
+                                issues.extend(p.get("eligibility_failures") or [])
+                            if issues:
+                                for _g in issues:
+                                    st.warning(f"⚠️ {_g}")
+                            else:
+                                st.success("✅ BUY conditions validated — gate passed, no stretched/fade/exhaustion flags")
                             st.markdown(
-                                f'<div class="price-row">'
-                                f'<span class="price-label">{label}</span>'
-                                f'<span class="{cls}">{val}</span>'
-                                f'</div>',
+                                f'<div style="font-size:12px; color:#9fb3c8">'
+                                f'Signal data as of <b>{ind.get("data_as_of","n/a")}</b> • '
+                                f'setup win-rate <b>{win if win is not None else "n/a"}%</b> over {samples} sessions • '
+                                f'crossover-confirm <b>{"Yes" if p.get("buy_rule_passed") else "No"}</b></div>',
                                 unsafe_allow_html=True
                             )
 
-                        st.markdown('<div class="section-header" style="margin-top:16px">Alert Triggers</div>', unsafe_allow_html=True)
-                        buy_alert  = ap.get("buy_alert_at")
-                        sell_alert = ap.get("sell_alert_at")
-                        stop_alert = ap.get("stop_alert_at")
-                        st.markdown(
-                            f'<div class="price-row">'
-                            f'<span class="price-label">🔔 Buy Alert</span>'
-                            f'<span class="price-val-blue">₹{buy_alert if buy_alert is not None else "—"}</span>'
-                            f'</div>'
-                            f'<div class="price-row">'
-                            f'<span class="price-label">📤 Sell Alert</span>'
-                            f'<span class="price-val-green">₹{sell_alert if sell_alert is not None else "—"}</span>'
-                            f'</div>'
-                            f'<div class="price-row">'
-                            f'<span class="price-label">🛑 Stop Alert</span>'
-                            f'<span class="price-val-red">₹{stop_alert if stop_alert is not None else "—"}</span>'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
+                            # Price levels
+                            col_prices, col_chart = st.columns([1, 2])
+                            with col_prices:
+                                st.markdown('<div class="section-header">Price Levels</div>', unsafe_allow_html=True)
+                                levels = [
+                                    ("Entry (Ideal)",  f"₹{ep.get('ideal','?')}",       "price-val-blue"),
+                                    ("Entry Zone",     f"₹{ep.get('range_low','?')} – ₹{ep.get('range_high','?')}", "price-val-white"),
+                                    ("Target 1",       f"₹{tp.get('T1','?')}",          "price-val-green"),
+                                    ("Target 2",       f"₹{tp.get('T2','?')}",          "price-val-green"),
+                                    ("Target 3",       f"₹{tp.get('T3','?')}",          "price-val-green"),
+                                    ("Stop Loss",      f"₹{p.get('stop_loss','?')}",    "price-val-red"),
+                                ]
+                                for label, val, cls in levels:
+                                    st.markdown(
+                                        f'<div class="price-row">'
+                                        f'<span class="price-label">{label}</span>'
+                                        f'<span class="{cls}">{val}</span>'
+                                        f'</div>',
+                                        unsafe_allow_html=True
+                                    )
 
-                    with col_chart:
-                        fig = candlestick_chart(sym)
-                        if fig:
-                            st.plotly_chart(fig, width="stretch",
-                                            key=f"chart_{style}_{i}_{sym}")
+                                st.markdown('<div class="section-header" style="margin-top:16px">Alert Triggers</div>', unsafe_allow_html=True)
+                                buy_alert  = ap.get("buy_alert_at")
+                                sell_alert = ap.get("sell_alert_at")
+                                stop_alert = ap.get("stop_alert_at")
+                                st.markdown(
+                                    f'<div class="price-row">'
+                                    f'<span class="price-label">🔔 Buy Alert</span>'
+                                    f'<span class="price-val-blue">₹{buy_alert if buy_alert is not None else "—"}</span>'
+                                    f'</div>'
+                                    f'<div class="price-row">'
+                                    f'<span class="price-label">📤 Sell Alert</span>'
+                                    f'<span class="price-val-green">₹{sell_alert if sell_alert is not None else "—"}</span>'
+                                    f'</div>'
+                                    f'<div class="price-row">'
+                                    f'<span class="price-label">🛑 Stop Alert</span>'
+                                    f'<span class="price-val-red">₹{stop_alert if stop_alert is not None else "—"}</span>'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
 
-                    # Signals
-                    st.markdown('<div class="section-header">Key Signals</div>', unsafe_allow_html=True)
-                    signals_html = "".join([f'<span class="signal-pill">✦ {s}</span>' for s in p.get("key_signals",[])])
-                    st.markdown(signals_html, unsafe_allow_html=True)
-                    st.markdown(
-                        f'<div style="font-size:12px; color:#6e7681; margin-top:10px;">'
-                        f'<b style="color:#8b949e">Exit if:</b> {p.get("exit_trigger","?")}</div>',
-                        unsafe_allow_html=True
-                    )
+                            with col_chart:
+                                fig = candlestick_chart(sym)
+                                if fig:
+                                    st.plotly_chart(fig, width="stretch",
+                                                    key=f"chart_{style}_{i}_{sym}")
 
-                    # Explainability: show breakdown of scores and signals
-                    with st.expander("Why this pick? (explainability)"):
-                        expl = explain_pick(p)
-                        rows = ""
-                        for k, v in expl:
-                            rows += f"- **{k}:** {v}  \n"
-                        st.markdown(rows)
+                            # Signals
+                            st.markdown('<div class="section-header">Key Signals</div>', unsafe_allow_html=True)
+                            signals_html = "".join([f'<span class="signal-pill">✦ {s}</span>' for s in p.get("key_signals",[])])
+                            st.markdown(signals_html, unsafe_allow_html=True)
+                            st.markdown(
+                                f'<div style="font-size:12px; color:#73879c; margin-top:10px;">'
+                                f'<b style="color:#9fb3c8">Exit if:</b> {p.get("exit_trigger","?")}</div>',
+                                unsafe_allow_html=True
+                            )
 
-                    # Action buttons
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    b1, b2, b3 = st.columns(3)
-                    with b1:
-                        if st.button(f"📨 Send Telegram Alert", key=f"picks_tel_{style}_{i}"):
-                            from alerts import send_buy_alert
-                            send_buy_alert(p)
-                            st.success("Alert sent!")
-                    with b2:
-                        # Buyer-safe order: live-stamp price, cash/notional cap,
-                        # reward/risk floor, style-appropriate target.
-                        try:
-                            from portfolio import add_holding
-                        except Exception:
-                            add_holding = None
-                        ind_for_pos = p.get('indicators', {}) or {}
-                        price_for_pos = ep.get('ideal', 0) or ind_for_pos.get('current_price', 0)
-                        atr_for_pos = ind_for_pos.get('atr')
-                        cash = st.session_state.get('cash_per_trade', 100000)
-                        order = build_buy_order(sym, price_for_pos, atr_for_pos, cash,
-                                                tp=tp, stop_rc=p.get('stop_loss'), style=style)
-                        qty_suggest = int(order.get('qty', 0))
-                        price_use = order.get('price') or price_for_pos
-                        stop_suggest = order.get('stop') or p.get('stop_loss', 0)
-                        target_use = order.get('target') or tp.get('T1', 0)
-                        add_disabled = not order.get('ok')
-                        # log the displayed suggestion
-                        try:
-                            from signal_logger import log_signal
-                            log_signal(sym, price_use, atr=atr_for_pos, qty=qty_suggest,
-                                       stop_loss=stop_suggest, source='today_display')
-                        except Exception:
-                            pass
-                        live_txt = f" • live ₹{order.get('live_price')}" if order.get('live_price') else ''
-                        st.markdown(
-                            f"<div style='font-size:12px;color:#8b949e'>"
-                            f"Suggested: qty {qty_suggest} • stop ₹{stop_suggest} • "
-                            f"target ₹{order.get('target','?')} • R:R {order.get('rr','?')}{live_txt}"
-                            f"</div>", unsafe_allow_html=True)
-                        if add_disabled:
-                            st.warning(f"⚠️ Add blocked: {order.get('reason')}")
-                        if st.button(f"➕ Add to Portfolio ({qty_suggest})",
-                                     key=f"picks_add_{style}_{i}",
-                                     disabled=add_disabled):
-                            from datetime import date
-                            if not (add_holding and order.get('ok')):
-                                st.error(f"❌ Cannot add {sym}: {order.get('reason') or 'invalid order'}")
-                            else:
-                                from portfolio import last_add_failures
-                                ok = add_holding(sym, price_use, qty_suggest,
-                                                 str(date.today()), target_use,
-                                                 stop_suggest, style, cash=cash)
-                                if ok:
-                                    try:
-                                        from signal_logger import log_signal
-                                        log_signal(sym, price_use, atr=atr_for_pos, qty=qty_suggest, stop_loss=stop_suggest, source='today_picks')
-                                    except Exception:
-                                        pass
-                                    st.success(f"Added {sym} to portfolio!")
-                                else:
-                                    reasons = "  \n".join(f"- {r}" for r in last_add_failures) or "Unknown validation error"
-                                    st.error(f"❌ Could not add {sym}:\n{reasons}")
+                            # Explainability: show breakdown of scores and signals
+                            with st.expander("Why this pick? (explainability)"):
+                                expl = explain_pick(p)
+                                rows = ""
+                                for k, v in expl:
+                                    rows += f"- **{k}:** {v}  \n"
+                                st.markdown(rows)
+
+                            # Action buttons
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            b1, b2, b3 = st.columns(3)
+                            with b1:
+                                if st.button(f"📨 Send Telegram Alert", key=f"picks_tel_{style}_{i}"):
+                                    from alerts import send_buy_alert
+                                    send_buy_alert(p)
+                                    st.success("Alert sent!")
+                            with b2:
+                                # Buyer-safe order: live-stamp price, cash/notional cap,
+                                # reward/risk floor, style-appropriate target.
+                                try:
+                                    from portfolio import add_holding
+                                except Exception:
+                                    add_holding = None
+                                ind_for_pos = p.get('indicators', {}) or {}
+                                price_for_pos = ep.get('ideal', 0) or ind_for_pos.get('current_price', 0)
+                                atr_for_pos = ind_for_pos.get('atr')
+                                cash = st.session_state.get('cash_per_trade', 100000)
+                                order = build_buy_order(sym, price_for_pos, atr_for_pos, cash,
+                                                        tp=tp, stop_rc=p.get('stop_loss'), style=style)
+                                qty_suggest = int(order.get('qty', 0))
+                                price_use = order.get('price') or price_for_pos
+                                stop_suggest = order.get('stop') or p.get('stop_loss', 0)
+                                target_use = order.get('target') or tp.get('T1', 0)
+                                add_disabled = not order.get('ok')
+                                # log the displayed suggestion
+                                try:
+                                    from signal_logger import log_signal
+                                    log_signal(sym, price_use, atr=atr_for_pos, qty=qty_suggest,
+                                               stop_loss=stop_suggest, source='today_display')
+                                except Exception:
+                                    pass
+                                live_txt = f" • live ₹{order.get('live_price')}" if order.get('live_price') else ''
+                                st.markdown(
+                                    f"<div style='font-size:12px;color:#9fb3c8'>"
+                                    f"Suggested: qty {qty_suggest} • stop ₹{stop_suggest} • "
+                                    f"target ₹{order.get('target','?')} • R:R {order.get('rr','?')}{live_txt}"
+                                    f"</div>", unsafe_allow_html=True)
+                                if add_disabled:
+                                    st.warning(f"⚠️ Add blocked: {order.get('reason')}")
+                                if st.button(f"➕ Add to Portfolio ({qty_suggest})",
+                                             key=f"picks_add_{style}_{i}",
+                                             disabled=add_disabled):
+                                    from datetime import date
+                                    if not (add_holding and order.get('ok')):
+                                        st.error(f"❌ Cannot add {sym}: {order.get('reason') or 'invalid order'}")
+                                    else:
+                                        from portfolio import last_add_failures
+                                        ok = add_holding(sym, price_use, qty_suggest,
+                                                         str(date.today()), target_use,
+                                                         stop_suggest, style, cash=cash)
+                                        if ok:
+                                            try:
+                                                from signal_logger import log_signal
+                                                log_signal(sym, price_use, atr=atr_for_pos, qty=qty_suggest, stop_loss=stop_suggest, source='today_picks')
+                                            except Exception:
+                                                pass
+                                            st.success(f"Added {sym} to portfolio!")
+                                        else:
+                                            reasons = "  \n".join(f"- {r}" for r in last_add_failures) or "Unknown validation error"
+                                            st.error(f"❌ Could not add {sym}:\n{reasons}")
 
 
 # ─────────────────────────────────────────────
@@ -1371,7 +1635,7 @@ elif "Portfolio" in page:
                             st.error("Portfolio remove function unavailable")
                     st.markdown('</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div style="font-size:12px;color:#6e7681">No positions to edit.</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:12px;color:#73879c">No positions to edit.</div>', unsafe_allow_html=True)
         if holdings:
             st.markdown('<div class="section-header" style="margin-top:20px">Close Position</div>', unsafe_allow_html=True)
             close_sym   = st.selectbox("Stock", [h["symbol"] for h in holdings])
@@ -1437,20 +1701,20 @@ elif "Portfolio" in page:
                 fig = go.Figure(go.Bar(
                     x=[r["Symbol"] for r in rows],
                     y=[r["P&L ₹"] for r in rows],
-                    marker_color=["#00d4aa" if r["P&L ₹"] >= 0 else "#ff4b4b" for r in rows],
+                    marker_color=["#2dd4bf" if r["P&L ₹"] >= 0 else "#fb7185" for r in rows],
                     text=[f"₹{r['P&L ₹']:+,.0f}" for r in rows],
                     textposition="outside",
                 ))
                 fig.update_layout(
                     template="plotly_dark",
-                    paper_bgcolor="#161b22",
-                    plot_bgcolor="#161b22",
+                    paper_bgcolor="#0d131c",
+                    plot_bgcolor="#0d131c",
                     height=220,
                     margin=dict(l=10,r=10,t=20,b=10),
-                    font=dict(family="Inter", color="#8b949e"),
-                    yaxis=dict(gridcolor="#21262d"),
-                    xaxis=dict(gridcolor="#21262d"),
-                    title=dict(text="P&L by Position", font=dict(color="#6e7681", size=12)),
+                    font=dict(family="Inter", color="#9fb3c8"),
+                    yaxis=dict(gridcolor="#1c2733"),
+                    xaxis=dict(gridcolor="#1c2733"),
+                    title=dict(text="P&L by Position", font=dict(color="#73879c", size=12)),
                 )
                 st.plotly_chart(fig, width="stretch", key="portfolio_pnl_bar")
 
@@ -1503,13 +1767,13 @@ elif "Analyze" in page:
                     # Header
                     st.markdown(
                         f'<div style="margin:16px 0">'
-                        f'<span style="font-size:28px;font-weight:700;color:#e6edf3">{sym_clean}</span>'
+                        f'<span style="font-size:28px;font-weight:700;color:#e6edf6">{sym_clean}</span>'
                         f'&nbsp;&nbsp;{rec_badge(rec)}&nbsp;&nbsp;{risk_badge(risk)}'
                         f'</div>',
                         unsafe_allow_html=True
                     )
                     st.markdown(
-                        f'<div style="font-size:14px;color:#8b949e;margin-bottom:20px">'
+                        f'<div style="font-size:14px;color:#9fb3c8;margin-bottom:20px">'
                         f'{result.get("analysis_summary","")}</div>',
                         unsafe_allow_html=True
                     )
@@ -1601,8 +1865,8 @@ elif "Analyze" in page:
                     signals_html = "".join([f'<span class="signal-pill">✦ {s}</span>' for s in result.get("key_signals", [])])
                     st.markdown(signals_html, unsafe_allow_html=True)
                     st.markdown(
-                        f'<div style="font-size:12px;color:#6e7681;margin-top:10px">'
-                        f'<b style="color:#8b949e">Exit if:</b> {result.get("exit_trigger","?")}</div>',
+                        f'<div style="font-size:12px;color:#73879c;margin-top:10px">'
+                        f'<b style="color:#9fb3c8">Exit if:</b> {result.get("exit_trigger","?")}</div>',
                         unsafe_allow_html=True
                     )
                     st.markdown("<br>", unsafe_allow_html=True)
@@ -1639,7 +1903,7 @@ elif "Analyze" in page:
                         target_use = order.get('target') or tp.get('T1', 0)
                         live_txt = f" • live ₹{order.get('live_price')}" if order.get('live_price') else ''
                         st.markdown(
-                            f"<div style='font-size:12px;color:#8b949e'>"
+                            f"<div style='font-size:12px;color:#9fb3c8'>"
                             f"Suggested: qty {qty_suggest} • stop ₹{stop_suggest} • "
                             f"target ₹{order.get('target','?')} • R:R {order.get('rr','?')}{live_txt}"
                             f"</div>", unsafe_allow_html=True)
@@ -1848,7 +2112,7 @@ elif "Screener Results" in page:
                                 stop_suggest = order.get('stop') or s.get('stop_loss') or 0
                                 target_use = order.get('target') or s.get('target', 0)
                                 st.markdown(
-                                    f"<div style='font-size:12px;color:#8b949e'>"
+                                    f"<div style='font-size:12px;color:#9fb3c8'>"
                                     f"Suggested: qty {qty_suggest} • stop ₹{stop_suggest} • target ₹{order.get('target','?')} • R:R {order.get('rr','?')}"
                                     f"</div>", unsafe_allow_html=True)
                                 try:
@@ -2052,14 +2316,14 @@ elif "Hold" in page:
         source  = r.get("decision_source", "AI")
 
         colors = {
-            "HOLD":         ("#ffa500","🔵"),
-            "FULL_SELL":    ("#ff4b4b","🔴"),
+            "HOLD":         ("#fbbf24","🔵"),
+            "FULL_SELL":    ("#fb7185","🔴"),
             "PARTIAL_SELL": ("#ff8c00","🟡"),
-            "ADD_MORE":     ("#00d4aa","🟢"),
+            "ADD_MORE":     ("#2dd4bf","🟢"),
         }
-        color, emoji = colors.get(action, ("#6e7681","⚪"))
+        color, emoji = colors.get(action, ("#73879c","⚪"))
         label = action.replace("_"," ")
-        pnl_color = "#00d4aa" if pnl >= 0 else "#ff4b4b"
+        pnl_color = "#2dd4bf" if pnl >= 0 else "#fb7185"
 
         with st.expander(
             f"{emoji}  {symbol}  •  {label}  •  "
@@ -2073,16 +2337,16 @@ elif "Hold" in page:
             c4.metric("Revised SL",      f"₹{r.get('revised_stop_loss','?')}")
 
             st.markdown(
-                f'<div style="background:#161b22;border:1px solid #21262d;'
+                f'<div style="background:#0d131c;border:1px solid #1c2733;'
                 f'border-radius:10px;padding:14px;margin:10px 0;">'
-                f'<div style="font-size:11px;color:#6e7681;margin-bottom:6px">{source.upper()} REASONING</div>'
-                f'<div style="font-size:14px;color:#e6edf3">{r.get("reasoning","")}</div>'
+                f'<div style="font-size:11px;color:#73879c;margin-bottom:6px">{source.upper()} REASONING</div>'
+                f'<div style="font-size:14px;color:#e6edf6">{r.get("reasoning","")}</div>'
                 f'</div>',
                 unsafe_allow_html=True
             )
             st.markdown(
-                f'<div style="font-size:12px;color:#6e7681">'
-                f'⚠️ Risk Flag: <span style="color:#ffa500">{r.get("risk_flag","None")}</span>'
+                f'<div style="font-size:12px;color:#73879c">'
+                f'⚠️ Risk Flag: <span style="color:#fbbf24">{r.get("risk_flag","None")}</span>'
                 f'</div>',
                 unsafe_allow_html=True
             )

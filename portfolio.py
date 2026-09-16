@@ -895,6 +895,18 @@ def suggest_buys(cash: float, max_positions: int = 10, universe: Optional[List[s
     if universe is None:
         universe = NSE_STOCKS
 
+    # Risk circuit breaker: when the account is bleeding past the daily-loss
+    # or drawdown floors, no fresh BUY suggestions are generated. This is the
+    # automation kill-switch that prevents a losing system from averaging in.
+    try:
+        from circuit_breaker import RiskCircuitBreaker
+        allowed, reason = RiskCircuitBreaker().pre_trade_check()
+        if not allowed:
+            print(f"  suggest_buys blocked by circuit breaker: {reason}")
+            return []
+    except Exception as exc:  # never fail the whole suggestion run on breaker error
+        print(f"  suggest_buys: circuit breaker unavailable ({exc}); continuing")
+
     # Run the main screener to get deterministic BUY candidates
     screener = StockScreener()
     # Use a small top_n to keep it fast; we'll re-rank below
