@@ -10,3 +10,12 @@ textColor = "#e6edf6"
 
 [browser]
 gatherUsageStats = false
+
+# Render / cloud deployment: run headless, bind to all interfaces and let
+# the platform inject the dynamic port via $PORT in the start command
+# (streamlit run ... --server.port $PORT). Keep 0.0.0.0 here; Streamlit
+# would otherwise bind to localhost only and the platform health check
+# would fail.
+[server]
+headless = true
+address = "0.0.0.0"

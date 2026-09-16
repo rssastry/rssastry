@@ -1,5 +1,6 @@
 # requirements.txt — StockAnalysis runtime & development dependencies
-# Pinned to the versions validated in the project .venv (Python 3.11).
+# Pinned to the versions validated in the project .venv (Python 3.14; keep
+# Render's PYTHON_VERSION / runtime.txt in sync — see render.yaml).
 # Install with:  python -m pip install -r requirements.txt
 
 # ── Data fetching ─────────────────────────────────────────────
@@ -32,4 +33,11 @@ schedule==1.2.2            # Daily job scheduler (schedular.py)
 # ── Development / test ────────────────────────────────────────
 pytest==9.1.1              # Unit test runner (tests/)
 
-gunicorn run:app
+# ── Deployment ───────────────────────────────────────────────────
+# Valid pin ONLY: the previous "gunicorn run:app" was a Flask-style
+# WSGI start command, not a pip requirement, and made every build fail.
+# Gunicorn is a WSGI server — it CANNOT serve Streamlit. The dashboard is
+# launched with:  streamlit run dashboard.py
+# (leave this pin in place only if your PaaS start-command references
+#  gunicorn; otherwise you may delete the whole line)
+gunicorn==23.0.0

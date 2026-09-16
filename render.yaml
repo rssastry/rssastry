@@ -1,0 +1,43 @@
+# render.yaml — Render Blueprint for the StockAnalysis Streamlit dashboard
+#
+# How to deploy:
+#   1. Push this repo to GitHub.
+#   2. Render Dashboard -> "New +" -> "Blueprint" -> select the repo.
+#   3. Done: Render reads this file and creates the web service with the
+#      build + start commands below.
+#
+# Alternative (manual Web Service): use the same values in the Render UI:
+#   - Environment:        Python 3
+#   - Build Command:      pip install -r requirements.txt
+#   - Start Command:      streamlit run dashboard.py --server.address 0.0.0.0 --server.port $PORT
+#   - Health Check Path:  /
+services:
+  - type: web
+    name: stock-analysis-dashboard
+    runtime: python
+    plan: free
+    region: singapore        # NSE-tuned latency (any region works)
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run dashboard.py --server.address 0.0.0.0 --server.port $PORT
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      # Match the Python version the pinned wheels were validated on
+      # (see the local .venv before deploying).
+      - key: PYTHON_VERSION
+        value: 3.14.6
+      # ── Secrets — set real values in the Render dashboard after deploy ──
+      # - key: GROQ_API_KEY
+      #   sync: false
+      # - key: GEMINI_API_KEY
+      #   sync: false
+      # - key: OPENROUTER_API_KEY
+      #   sync: false
+      # - key: TELEGRAM_BOT_TOKEN
+      #   sync: false
+      # - key: TELEGRAM_CHAT_ID
+      #   sync: false
+      # - key: KITE_API_KEY
+      #   sync: false
+      # - key: KITE_ACCESS_TOKEN
+      #   sync: false
