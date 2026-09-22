@@ -19,8 +19,38 @@ import pandas as pd
 # Header and column order used by every file in raw_data/prices
 CSV_COLUMNS = ["Adj Close", "Close", "High", "Low", "Open", "Volume"]
 
-PRICE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "raw_data", "prices")
+# Git-tracked copy of the frozen per-symbol CSVs (the "seed" / fallback that
+# survives a fresh clone). Not writable on Render's ephemeral filesystem —
+# runtime refreshes go to PRICE_DIR instead (see writable_price_dir).
+REPO_PRICE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "raw_data", "prices")
+
+
+def _state_root() -> str:
+    """Durable-state root from env SA_DATA_DIR ('' = working directory)."""
+    root = os.environ.get("SA_DATA_DIR", "").strip()
+    if root.lower() in ("0", "false", "no", "off"):
+        root = ""
+    return root
+
+
+def writable_price_dir() -> str:
+    """Directory where refreshed price CSVs are WRITTEN.
+
+    With SA_DATA_DIR set (e.g. a Render Persistent Disk mounted at /var/data)
+    price files live under that durable root; otherwise they live in the repo
+    exactly as before. A fresh durable store is seeded from the git-tracked
+    CSVs on first use (see update_price_files.update_one), so no history is
+    lost when a new disk/machine is provisioned.
+    """
+    root = _state_root()
+    if root:
+        return os.path.join(root, "raw_data", "prices")
+    return REPO_PRICE_DIR
+
+
+# Canonical read/write directory for price CSVs.
+PRICE_DIR = writable_price_dir()
 
 
 def symbol_to_filename(symbol: str) -> str:
@@ -33,20 +63,36 @@ def csv_path_for(symbol: str) -> str:
     return os.path.join(PRICE_DIR, symbol_to_filename(symbol))
 
 
+def seed_path_for(symbol: str) -> str:
+    """Read-only fallback to the git-tracked CSV (used when SA_DATA_DIR is set
+    but the durable store has not been seeded for this symbol yet)."""
+    return os.path.join(REPO_PRICE_DIR, symbol_to_filename(symbol))
+
+
 def list_symbols() -> list:
-    """Bare-symbol names for every CSV present in the price directory."""
-    if not os.path.isdir(PRICE_DIR):
-        return []
-    return sorted(os.path.splitext(f)[0] for f in os.listdir(PRICE_DIR)
-                  if f.lower().endswith(".csv"))
+    """Bare-symbol names for every CSV present (durable dir + repo seed)."""
+    dirs = [PRICE_DIR]
+    if PRICE_DIR != REPO_PRICE_DIR:
+        dirs.append(REPO_PRICE_DIR)
+    names = set()
+    for directory in dirs:
+        if os.path.isdir(directory):
+            names.update(os.path.splitext(f)[0] for f in os.listdir(directory)
+                         if f.lower().endswith(".csv"))
+    return sorted(names)
 
 
 def read_raw(symbol: str) -> pd.DataFrame:
     """Read the raw CSV as-is (unadjusted) with a Date index.
 
+    Reads the durable copy when present, otherwise the git-tracked seed, so a
+    freshly-provisioned durable store still answers from the committed CSVs.
+
     Returns an empty DataFrame when no file exists for the symbol.
     """
     path = csv_path_for(symbol)
+    if not os.path.exists(path):
+        path = seed_path_for(symbol)
     if not os.path.exists(path):
         return pd.DataFrame()
     try:

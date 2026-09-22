@@ -26,13 +26,26 @@ services:
       # (see the local .venv before deploying).
       - key: PYTHON_VERSION
         value: 3.14.6
-      # ── Secrets — set real values in the Render dashboard after deploy ──
-      # - key: GROQ_API_KEY
-      #   sync: false
-      # - key: GEMINI_API_KEY
-      #   sync: false
-      # - key: OPENROUTER_API_KEY
-      #   sync: false
+      # ── Secrets — at least one AI key is REQUIRED for the morning scan.
+      # sync:false prompts for a value when the Blueprint is first created,
+      # or you can set them in Env > Environment later.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      # ── Durable storage (optional, paid) ──────────────────────
+      # Free-tier Render has an EPHEMERAL filesystem: every file the app
+      # writes at runtime is wiped on restart/redeploy, and the scheduler in
+      # this repo is NOT started by the web service. To keep state across
+      # restarts, upgrade to a paid plan, add a Persistent Disk mounted at
+      # e.g. /var/data, and point all writable paths at it:
+      # - key: SA_DATA_DIR
+      #   value: /var/data
+      # (Every module honors SA_DATA_DIR via paths.py — CACHE_DIR, the
+      #  SQLite stores, raw price CSVs, snapshots and JSON reports.)
+      # ── Optional (alerts / broker execution) ─────────────────────
       # - key: TELEGRAM_BOT_TOKEN
       #   sync: false
       # - key: TELEGRAM_CHAT_ID

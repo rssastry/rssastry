@@ -1,6 +1,78 @@
 # StockAnalysis
 Analyze the stocks
 
+## Deploy to Render (dashboard)
+
+The dashboard is a **Streamlit** app (`dashboard.py`). Render must NOT use its
+default `gunicorn app:app` start command — gunicorn is a WSGI server and cannot
+serve Streamlit.
+
+**Blueprint (recommended):** after pushing, Render → **New + → Blueprint** →
+select this repo. `render.yaml` in the repo root wires the build and start
+commands, health check path, and Python version automatically.
+
+**Manual web service:** set these exactly on the service:
+
+- Environment:      `Python 3`
+- Build command:    `pip install -r requirements.txt`
+- Start command:    `streamlit run dashboard.py --server.address 0.0.0.0 --server.port $PORT`
+- Health check path: `/`
+
+A `Procfile` with the correct start command is included as a fallback, but an
+explicit Start Command in the Render dashboard always wins. After changing the
+start command, trigger **Manual Deploy → Deploy latest commit**.
+
+Add API keys (GROQ_API_KEY, TELEGRAM_BOT_TOKEN, KITE_*, …) as Render environment
+variables, not a `.env` file.
+
+## Free tier reality check (data resets + missing daily scans)
+
+Two things about the **free** Render plan bite this app:
+
+1. **The filesystem is ephemeral.** A free web service spins down after ~15
+   minutes of inactivity and is recycled; every file the app writes at runtime
+   — `data_cache/` Parquet + SQLite + fundamental snapshots, refreshed
+   `raw_data/prices/*.csv`, `ai_analysis.json`, `screener_results.json`,
+   `signals_log.csv` — is wiped on the next restart / redeploy. Only files in
+   git survive a fresh deployment.
+2. **The daily scheduler never runs.** The web-service start command only
+   launches Streamlit (`streamlit run dashboard.py`). The bundled scheduler
+   (`python run.py scheduler`) is a separate long-running process that Render
+   does not start, so nothing scans automatically — you would have to click
+   **▶ Run Morning Scan** in the sidebar yourself every day.
+
+### Recommended fix — GitHub Actions daily scan (free)
+
+`.github/workflows/daily-scan.yml` runs the full post-close scan on GitHub's
+free runners every weekday at 15:45 IST and commits the fresh results back to
+`main`. Because Render has `autoDeploy: true`, the dashboard redeploys with
+the latest `ai_analysis.json` / `screener_results.json` / refreshed price
+CSVs automatically — so it stops "starting from fresh" and always shows the
+latest scan.
+
+1. Push this repo to GitHub.
+2. Add at least **`GROQ_API_KEY`** as a repository secret
+   (`Settings → Secrets and variables → Actions`); `GEMINI_API_KEY` /
+   `OPENROUTER_API_KEY` are fallbacks, `TELEGRAM_*` are optional alerts.
+3. Trigger a first run manually via the **Actions → Daily Market Scan →
+   Run workflow** button; after that it runs on the schedule.
+
+Note: scans commit only small text/CSV outputs (price files, JSON reports,
+snapshots) so the repo stays manageable. The ai_analysis results reflect the
+deterministic gates — a *bearish market regime (NIFTY below EMA50) suppresses
+all BUYs by design*, so a zero-BUY report is usually the filter working, not
+a deployment failure.
+
+### Paid-plan alternative — persistent disk
+
+For state with zero reliance on git, upgrade to a paid plan, add a Render
+**Persistent Disk** mounted at e.g. `/var/data`, and set the **`SA_DATA_DIR`**
+environment variable to that path. Every writable path in the app (Parquet
+cache, SQLite stores, price CSVs, snapshots, JSON reports) honors it via
+`paths.py`; reads automatically fall back to the git-tracked files until the
+disk has been seeded. Seed the disk once by copying the current
+`data_cache/` and `raw_data/prices/` from a working copy into it.
+
 ## Historical data maintenance
 
 The application stores daily OHLCV data in `data_cache/` as period-specific

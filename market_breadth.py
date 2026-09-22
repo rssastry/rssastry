@@ -35,11 +35,12 @@ import numpy as np
 import pandas as pd
 
 from price_store import list_symbols, load_adjusted
+import paths
 
 NIFTY_SYMBOL = "^NSEI"
 VOL_WINDOW = 20
 VOL_HISTORY = 250
-SNAPSHOT_DIR = os.path.join("data_cache", "fundamental_snapshots")
+SNAPSHOT_DIR = paths.dir_path(os.path.join("data_cache", "fundamental_snapshots"))
 
 
 def ema(series: pd.Series, window: int) -> pd.Series:
@@ -183,8 +184,8 @@ def relative_movers(n: int = 10, symbols=None) -> dict:
     return {"leaders": rows[:n], "laggards": rows[-n:][::-1]}
 
 
-def build_market_snapshot(out: str = "market_snapshot.json",
-                          symbols=None) -> dict:
+def build_market_snapshot(out: str = None, symbols=None) -> dict:
+    out = out or paths.path("market_snapshot.json")
     snapshot = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source": "local raw_data/prices CSVs (frozen, reproducible)",

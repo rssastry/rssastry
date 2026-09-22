@@ -6,8 +6,9 @@ from datetime import date, timedelta
 
 import yfinance as yf
 
+import paths
 
-SNAPSHOT_DIR = os.path.join("data_cache", "fundamental_snapshots")
+SNAPSHOT_DIR = paths.dir_path(os.path.join("data_cache", "fundamental_snapshots"))
 
 # Yahoo Finance ticker aliases for local NSE symbols whose company was renamed
 # or de-merged on the provider after the symbol joined the universe. Records

@@ -16,6 +16,7 @@ import json
 import os
 from collections import Counter
 import strategies
+import paths
 from fundamental_snapshots import resolve_provider_ticker, merge_fundamental_snapshots
 
 warnings.filterwarnings("ignore")
@@ -1353,7 +1354,7 @@ class StockScreener:
 
     def _save_results(self, results: dict):
         output = {"scan_time": self.scan_time, "results": results}
-        with open("screener_results.json", "w") as f:
+        with open(paths.path("screener_results.json"), "w") as f:
             json.dump(output, f, indent=2, default=str)
 
 

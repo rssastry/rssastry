@@ -1,6 +1,8 @@
 # config.py — shared configuration constants
 import os
 
+import paths
+
 # Count completed trading bars, not calendar days (Friday -> Monday is one bar).
 CROSSOVER_RECENCY_BARS = 2
 RISK_PER_TRADE = 0.01  # fraction of portfolio risked per trade
@@ -10,7 +12,10 @@ MIN_DAILY_HISTORY = 260  # supports reliable EMA50 and genuine 52-week context
 MIN_RISK_REWARD = 2.0
 # A cache is only a performance aid; it must not bridge different data requests.
 CACHE_TTL_HOURS = 6
-CACHE_DIR = 'data_cache'
+# Resolved under SA_DATA_DIR when set, so a durable mount (Render persistent
+# disk) is honored; otherwise it stays the working-directory relative
+# 'data_cache' exactly as before.
+CACHE_DIR = paths.path('data_cache')
 # Keep enough daily history for multi-year walk-forward validation. The cache
 # key includes the period, so this does not mix 5y data with shorter requests.
 HISTORICAL_DATA_PERIOD = "5y"

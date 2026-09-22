@@ -11,6 +11,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from config import AI_BUY_MIN_CONFIDENCE
 from indicators import IndicatorEngine
+import paths
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -76,7 +77,8 @@ class AIAnalyst:
 
         raise ValueError(
             "No AI engine available. "
-            "Add GROQ_API_KEY or OPENROUTER_API_KEY or GEMINI_API_KEY to .env"
+            "Set GROQ_API_KEY or OPENROUTER_API_KEY or GEMINI_API_KEY in .env "
+            "(or as environment variables on Render / your deployment host)"
         )
 
     def _extract_json(self, text: str):
@@ -531,7 +533,7 @@ Reply ONLY with valid JSON:
                         "date":     self.analysis_date,
                         "analysis": {**all_analysis, style: style_results}
                     }
-                    with open("ai_analysis_progress.json", "w") as f:
+                    with open(paths.path("ai_analysis_progress.json"), "w") as f:
                         json.dump(self._clean_for_json(progress), f, indent=2, default=str)
                 except Exception:
                     pass
@@ -547,8 +549,8 @@ Reply ONLY with valid JSON:
 
         # Write to temp file first, rename only when fully complete
         output    = {"date": self.analysis_date, "analysis": all_analysis}
-        temp_file = "ai_analysis_temp.json"
-        final_file= "ai_analysis.json"
+        temp_file = paths.path("ai_analysis_temp.json")
+        final_file= paths.path("ai_analysis.json")
         try:
             clean_output = self._clean_for_json(output)
             with open(temp_file, "w") as f:

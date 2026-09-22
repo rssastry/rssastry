@@ -12,7 +12,9 @@ warnings.filterwarnings("ignore")
 from indicators import IndicatorEngine
 from typing import List, Dict, Any, Optional
 
-PORTFOLIO_FILE = "portfolio.json"
+import paths
+
+PORTFOLIO_FILE = paths.path("portfolio.json")
 
 # Stores the failure reasons from the most recent add_holding() call
 # so callers (e.g. the dashboard) can surface them to the user.

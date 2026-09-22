@@ -37,8 +37,9 @@ import pandas as pd
 from config import STYLE_MAX_HOLD_BARS
 from price_store import load_adjusted
 from market_breadth import _sector_for
+import paths
 
-PORTFOLIO_FILE = "portfolio.json"
+PORTFOLIO_FILE = paths.path("portfolio.json")
 NIFTY_SYMBOL = "^NSEI"
 
 
@@ -220,8 +221,8 @@ def positives_ratio(rows: list) -> float:
     return sum(1 for r in rows if (r.get("alpha_pct") or 0) > 0) / len(rows)
 
 
-def build_discipline_report(out: str = "portfolio_discipline_report.json",
-                            portfolio: dict = None) -> dict:
+def build_discipline_report(out: str = None, portfolio: dict = None) -> dict:
+    out = out or paths.path("portfolio_discipline_report.json")
     aging = position_aging(portfolio=portfolio)
     conc = concentration(portfolio=portfolio)
     closed = realized_ledger(portfolio=portfolio)

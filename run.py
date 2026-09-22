@@ -23,6 +23,8 @@ import sys
 import os
 import subprocess
 
+import paths
+
 
 def get_python_executable():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -48,11 +50,11 @@ def main():
 
     elif cmd == "analyze":
         import json
-        if not os.path.exists("screener_results.json"):
+        if not os.path.exists(paths.path("screener_results.json")):
             print("Run 'python run.py screen' first.")
             return
         try:
-            with open("screener_results.json") as f:
+            with open(paths.path("screener_results.json")) as f:
                 data = json.load(f)
         except json.JSONDecodeError:
             print("screener_results.json is corrupted. Re-running screener...")
@@ -173,19 +175,20 @@ def _bible_journal_default():
 
     journal = DecisionJournal()
     try:
-        for path in ("screener_results.json", "ai_analysis.json"):
+        for rel in ("screener_results.json", "ai_analysis.json"):
+            path = paths.path(rel)
             if not os.path.exists(path):
                 continue
             res = journal.import_from_file(
-                path, source="ai" if "ai_" in path else "screener")
-            print(f"Journal <- {path}: inserted={res['inserted']} "
+                path, source="ai" if "ai_" in rel else "screener")
+            print(f"Journal <- {rel}: inserted={res['inserted']} "
                   f"duplicates={res['duplicates']}")
         stats = journal.resolve_open(hypothetical=True)
         resolved = sum(v for k, v in stats.items()
                        if k not in ("OPEN", "NO_PLAN"))
         print(f"Resolved {resolved} decision(s): {stats}")
         report = journal.report(by="style")
-        with open("journal_report.json", "w", encoding="utf-8") as handle:
+        with open(paths.path("journal_report.json"), "w", encoding="utf-8") as handle:
             json.dump(report, handle, indent=2, default=str)
         print("Saved: journal_report.json")
     finally:

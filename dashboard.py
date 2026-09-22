@@ -12,6 +12,7 @@ import plotly.express as px
 from datetime import datetime
 import yfinance as yf
 import warnings
+import paths
 from decision_quality import build_decision_summary
 warnings.filterwarnings("ignore")
 
@@ -446,8 +447,11 @@ a { color: var(--blue); }
 # Helpers
 # ─────────────────────────────────────────────
 def load_json(path):
-    if not os.path.exists(path) and path == "ai_analysis.json":
+    # Resolve against the durable state dir (SA_DATA_DIR, if configured) so
+    # the dashboard reads the SAME files the scanner writes on a persistent mount.
+    if not os.path.exists(paths.path(path)) and path == "ai_analysis.json":
         path = "ai_analysis_progress.json"
+    path = paths.path(path)
     if not os.path.exists(path):
         return {}
     try:
@@ -457,7 +461,7 @@ def load_json(path):
             return {}
         return json.loads(content)
     except json.JSONDecodeError:
-        st.warning(f"{path} is corrupted. Re-run the analysis.")
+        st.warning(f"{os.path.basename(path)} is corrupted. Re-run the analysis.")
         return {}
 
 
@@ -894,7 +898,7 @@ with st.sidebar:
         "market_snapshot.json": "🌐  Market & Discipline",
     }
     for f, label in reports.items():
-        if os.path.exists(f) and label not in page_items:
+        if os.path.exists(paths.path(f)) and label not in page_items:
             page_items.append(label)
 
     page = st.radio("Navigation", page_items, label_visibility="collapsed")
@@ -971,11 +975,12 @@ with st.sidebar:
         "portfolio.json":        "Portfolio",
     }
     for f, label in files.items():
-        exists = os.path.exists(f)
-        dot    = "🟢" if exists else "🔴"
-        ts     = ""
+        resolved = paths.path(f)
+        exists   = os.path.exists(resolved)
+        dot      = "🟢" if exists else "🔴"
+        ts       = ""
         if exists:
-            mt = os.path.getmtime(f)
+            mt = os.path.getmtime(resolved)
             ts = datetime.fromtimestamp(mt).strftime("%H:%M")
         st.markdown(
             f'<div style="font-size:12px; color:#73879c; padding:2px 0;">'
@@ -1981,10 +1986,11 @@ elif "Buy Suggestions" in page:
 
 elif "Screener Results" in page:
     st.markdown('<div class="page-title">Screener Results</div>', unsafe_allow_html=True)
-    if not os.path.exists('screener_results.json'):
+    _screener_file = paths.path('screener_results.json')
+    if not os.path.exists(_screener_file):
         st.info('No screener results found. Run the screener to generate screener_results.json')
     else:
-        with open('screener_results.json') as f:
+        with open(_screener_file) as f:
             rep = json.load(f)
         scan_time = rep.get('scan_time', '')
         results = rep.get('results', {})

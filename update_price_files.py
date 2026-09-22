@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from price_store import CSV_COLUMNS, PRICE_DIR, csv_path_for
+from price_store import CSV_COLUMNS, PRICE_DIR, csv_path_for, seed_path_for
 from screener import NSE_STOCKS
 from fundamental_snapshots import resolve_provider_ticker
 
@@ -148,8 +148,19 @@ def update_one(symbol: str, dry_run: bool = False) -> str:
     path = csv_path_for(symbol)
     tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
 
+    if not os.path.exists(path) and os.path.exists(seed_path_for(symbol)):
+        # Seed a fresh durable store (SA_DATA_DIR mount) from the git-tracked
+        # CSV so the frozen history is preserved and only genuinely new bars
+        # are appended below — never a full 5-year re-download.
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(seed_path_for(symbol), "rb") as src, \
+                open(path, "wb") as dst:
+            dst.write(src.read())
+
     if not os.path.exists(path):
-        # Back-fill a symbol that has no CSV yet.
+        # Back-fill a symbol that has no CSV (and no seed) yet.
         fetched = fetch_bars(symbol, end_exclusive=tomorrow,
                              period=BACKFILL_PERIOD)
         if fetched.empty:

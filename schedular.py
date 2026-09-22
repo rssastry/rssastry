@@ -12,6 +12,7 @@ from screener import StockScreener
 from ai_analyst import AIAnalyst
 from portfolio import show_portfolio, run_hold_sell_analysis
 from alerts import send_morning_summary, send_portfolio_alert, send_telegram
+import paths
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -156,11 +157,12 @@ def job_preclose_check():
 
     log("Pre-close stop loss check...")
     try:
-        if not os.path.exists("portfolio.json"):
+        _portfolio_file = paths.path("portfolio.json")
+        if not os.path.exists(_portfolio_file):
             log("No portfolio file found.")
             return
 
-        with open("portfolio.json") as f:
+        with open(_portfolio_file) as f:
             portfolio = json.load(f)
 
         from indicators import IndicatorEngine
@@ -216,8 +218,9 @@ def job_eod_summary():
     try:
         # Build portfolio P&L summary
         pnl_text = ""
-        if os.path.exists("portfolio.json"):
-            with open("portfolio.json") as f:
+        _portfolio_file = paths.path("portfolio.json")
+        if os.path.exists(_portfolio_file):
+            with open(_portfolio_file) as f:
                 portfolio = json.load(f)
             holdings = portfolio.get("holdings", [])
             if holdings:

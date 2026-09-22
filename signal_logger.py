@@ -2,7 +2,9 @@ import csv
 import os
 from datetime import datetime, timezone
 
-LOG_FILE = "signals_log.csv"
+import paths
+
+LOG_FILE = paths.path("signals_log.csv")
 
 FIELDNAMES = [
     "ts", "symbol", "source", "price", "atr", "qty", "stop_loss", "note"
