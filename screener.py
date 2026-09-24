@@ -8,6 +8,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, EMAIndicator, ADXIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
@@ -102,7 +103,12 @@ from config import (CROSSOVER_RECENCY_BARS, MAX_VOLUME_RATIO, MIN_DAILY_HISTORY,
                     MAX_FUNDAMENTAL_DEBT_TO_EQUITY, MAX_FUNDAMENTAL_PE,
                     ADX_MIN_FOR_BUY, ADX_STRONG_FOR_NO_TRIGGER,
                     VOLUME_CONFIRMATION_MARGIN_BY_STYLE,
-                    ALLOW_DAILY_BAR_INTRADAY_BUY)
+                    ALLOW_DAILY_BAR_INTRADAY_BUY,
+                    REQUIRE_COMPLETED_DAILY_BAR_FOR_BUY,
+                    ENABLE_PILOT_BUYS, PILOT_POSITION_SCALE,
+                    PILOT_RS_LOOKBACK_BARS, PILOT_MIN_RS_VS_NIFTY,
+                    PILOT_BREAKOUT_VOLUME_RATIO, PILOT_MIN_EPS_GROWTH,
+                    PILOT_MIN_20D_TRADED_VALUE)
 from indicators import find_unresolved_breakdown
 
 # ─────────────────────────────────────────────
@@ -298,6 +304,137 @@ def fundamental_buy_gate(fundamentals: dict, quality_score: float,
     return not failures, failures
 
 
+def pilot_gate_eligible(failed_checks: list, anomaly: bool,
+                        enabled: bool = ENABLE_PILOT_BUYS) -> bool:
+    """Pilot path may run ONLY when the market-regime filter is the SOLE
+    failure of an otherwise fully-qualified candidate."""
+    return bool(enabled) and not anomaly and len(failed_checks) == 0
+
+
+def _stock_return(close, lookback_bars: int = 21) -> float | None:
+    """Simple trailing return over ``lookback_bars`` completed bars."""
+    try:
+        series = pd.Series(close).astype(float).dropna()
+        if len(series) < lookback_bars + 1:
+            return None
+        return float(series.iloc[-1] / series.iloc[-(lookback_bars + 1)] - 1.0)
+    except Exception:
+        return None
+
+
+def _nifty_return(lookback_bars: int = 21) -> float | None:
+    """21-bar (≈1-month) return of the ^NSEI index; None when unavailable."""
+    try:
+        from data_cache import fetch_history
+        df = fetch_history("^NSEI", period="1y", interval="1d")
+        if df is None or getattr(df, "empty", True):
+            return None
+        return _stock_return(df["Close"], lookback_bars)
+    except Exception:
+        return None
+
+
+def pilot_conditions_met(ind: dict, fundamentals: dict,
+                         nifty_return: float | None, close=None,
+                         high=None) -> tuple:
+    """Stricter stock-level filters required to upgrade a candidate to a
+    PILOT BUY while NIFTY is confirmed below its 50-day EMA.
+
+    The candidate must already pass the ENTIRE normal buy gate — this only
+    decides whether the sole ``market regime`` failure may be overridden.
+
+    Returns (approved, failures, advisory_notes).
+    """
+    failures: list[str] = []
+    notes: list[str] = []
+    # The current provider does not supply a point-in-time earnings-surprise
+    # history or sector-index return series, so do not imply those overlays pass.
+    notes.append("Earnings-surprise and sector-tailwind data not evaluated")
+    price = float(ind.get("current_price", 0) or 0)
+
+    # 1) The stock's OWN trend must be healthy (price above its 200d & 50d EMAs).
+    ema50 = ind.get("ema50")
+    ema200 = ind.get("ema200")
+    if ema50 is None or ema200 is None:
+        failures.append("50/200-day EMA unavailable for pilot check")
+    else:
+        if price <= float(ema50):
+            failures.append("Price below its own 50-day EMA")
+        if price <= float(ema200):
+            failures.append("Price below its own 200-day EMA")
+        else:
+            notes.append("price above own 200d/50d EMAs")
+
+    # 2) Price-relative strength vs NIFTY. This is an indexed-price ratio,
+    # not a mathematically ambiguous "multiple of returns" in a falling market.
+    stock_ret = _stock_return(close, PILOT_RS_LOOKBACK_BARS) if close is not None else None
+    if stock_ret is None:
+        failures.append("Relative strength data unavailable (insufficient price history)")
+    elif nifty_return is None:
+        failures.append("NIFTY benchmark data unavailable — relative strength cannot be computed")
+    else:
+        rs = (1.0 + float(stock_ret)) / (1.0 + float(nifty_return))
+        if rs < PILOT_MIN_RS_VS_NIFTY:
+            failures.append(
+                f"Fails RS filter (≈{rs:.2f}x NIFTY < {PILOT_MIN_RS_VS_NIFTY:.2f}x required)"
+            )
+        else:
+            notes.append(f"price RS vs NIFTY ≈{rs:.2f}x")
+
+    # 3) High-volume breakout confirmation: volume ≥ 150% of the 20d average AND
+    #    close above the PRIOR 10-session high (the resistance that existed at
+    #    yesterday's close -- ind['resistance_1'] includes TODAY's bar, whose
+    #    high is by definition >= close, so it can never confirm a breakout).
+    if not ind.get("daily_bar_complete", False):
+        failures.append(
+            "Pilot requires a completed daily breakout bar; intraday volume is not confirmed"
+        )
+    traded_value = float(ind.get("median_traded_value_20d", 0) or 0)
+    if traded_value < PILOT_MIN_20D_TRADED_VALUE:
+        failures.append(
+            f"Fails liquidity filter (20d median traded value ₹{traded_value:,.0f} < "
+            f"₹{PILOT_MIN_20D_TRADED_VALUE:,.0f})"
+        )
+    eff_vol = float(ind.get("effective_vol_ratio", ind.get("volume_ratio", 0)) or 0)
+    prior_breakout = False
+    if high is not None:
+        try:
+            hs = pd.Series(high).astype(float).dropna()
+            if len(hs) >= 11:
+                prior_res = float(hs.iloc[-11:-1].max())
+                prior_breakout = price > prior_res
+        except Exception:
+            prior_breakout = False
+    if eff_vol >= PILOT_BREAKOUT_VOLUME_RATIO and prior_breakout:
+        notes.append(f"high-volume breakout ({eff_vol:.2f}x prior-20-session average volume)")
+    else:
+        failures.append(
+            f"Fails breakout-volume condition (volume {eff_vol:.2f}x < "
+            f"{PILOT_BREAKOUT_VOLUME_RATIO:.2f}x of 20d avg and/or close not above "
+            "the prior 10-session high)"
+        )
+
+    # 4) Fundamental overlay — require EPS growth when the provider reports it.
+    growth = fundamentals.get("earningsGrowth")
+    if growth is None:
+        growth = fundamentals.get("earningsQuarterlyGrowth")
+    if growth is not None:
+        try:
+            growth = float(growth)
+            if growth < PILOT_MIN_EPS_GROWTH:
+                failures.append(
+                    f"EPS growth {growth*100:.1f}% below {PILOT_MIN_EPS_GROWTH*100:.0f}% floor"
+                )
+            else:
+                notes.append(f"EPS growth {growth*100:.1f}%")
+        except Exception:
+            notes.append("EPS growth n/a (advisory)")
+    else:
+        notes.append("EPS growth n/a (advisory)")
+
+    return not failures, failures, notes
+
+
 def _historical_signal_win_rate(close: pd.Series, bb_pband_ser: pd.Series,
                                 rsi_ser: pd.Series, min_samples: int = 20) -> tuple:
     """Empirical next-session win rate for the CURRENT stretched setup.
@@ -479,13 +616,17 @@ class StockScreener:
         ema9      = EMAIndicator(close, window=9).ema_indicator().iloc[-1]
         ema21     = EMAIndicator(close, window=21).ema_indicator().iloc[-1]
         ema50     = EMAIndicator(close, window=50).ema_indicator().iloc[-1]
+        ema200    = EMAIndicator(close, window=min(200, max(len(close) - 1, 3))).ema_indicator().iloc[-1]
         bb        = BollingerBands(close, window=20, window_dev=2)
         bb_pband_ser = bb.bollinger_pband()
         bb_pct    = bb_pband_ser.iloc[-1]
         atr       = AverageTrueRange(high, low, close, window=14).average_true_range().iloc[-1]
         current   = close.iloc[-1]
         atr_pct   = (atr / current) * 100
-        avg_vol   = vol.iloc[-20:].median()
+        # Signal-bar volume is compared with the preceding 20 completed bars.
+        # Including the signal bar in its own baseline understates a real spike.
+        prior_vol = vol.iloc[-21:-1]
+        avg_vol = prior_vol.mean() if len(prior_vol) >= 20 else 0
         vol_ratio = vol.iloc[-1] / avg_vol if avg_vol > 0 else 0
         # cap extreme ratios
         try:
@@ -498,20 +639,30 @@ class StockScreener:
         # is incomplete and will make volume_ratio artificially low.
         # Use the previous complete day's volume ratio for confirmation.
         vol_ratio_prev_day = 0.0
+        daily_bar_complete = True
         try:
             last_date = df.index[-1]
             if hasattr(last_date, "date"):
                 last_date = last_date.date()
-            from datetime import date
-            is_today = (last_date == date.today())
-            if is_today and len(vol) >= 2:
+            from datetime import date, time
+            ist_now = datetime.now(ZoneInfo("Asia/Kolkata"))
+            is_today = (last_date == ist_now.date())
+            # A daily bar is reliable only after the NSE close buffer. A prior
+            # trading date is naturally complete (weekends/holidays included).
+            daily_bar_complete = (not is_today) or (
+                ist_now.weekday() < 5 and ist_now.time() >= time(15, 40)
+            )
+            if is_today and not daily_bar_complete and len(vol) >= 2:
                 prev_vol = vol.iloc[-2]
-                vol_ratio_prev_day = prev_vol / avg_vol if avg_vol > 0 else 0
+                prev_base = vol.iloc[-22:-2].mean() if len(vol) >= 22 else 0
+                vol_ratio_prev_day = prev_vol / prev_base if prev_base > 0 else 0
                 vol_ratio_prev_day = min(float(vol_ratio_prev_day), MAX_VOLUME_RATIO)
         except Exception:
             vol_ratio_prev_day = 0.0
         # Use the more reliable (complete-day) ratio for eligibility checks
         effective_vol_ratio = vol_ratio_prev_day if vol_ratio_prev_day > 0 else vol_ratio
+        prior_value = (close.iloc[-21:-1] * vol.iloc[-21:-1]).dropna()
+        median_traded_value_20d = prior_value.median() if len(prior_value) >= 20 else 0
         prev_close= close.iloc[-2]
         price_change_pct = ((current - prev_close) / prev_close) * 100
 
@@ -744,6 +895,7 @@ class StockScreener:
             "ema9":               round(ema9, 2),
             "ema21":              round(ema21, 2),
             "ema50":              round(ema50, 2),
+            "ema200":             round(ema200, 2),
             "bb_upper":           round(bb.bollinger_hband().iloc[-1], 2),
             "bb_lower":           round(bb.bollinger_lband().iloc[-1], 2),
             "bb_mid":             round(bb.bollinger_mavg().iloc[-1], 2),
@@ -754,6 +906,8 @@ class StockScreener:
             "avg_volume_20d":     int(avg_vol),
             "volume_ratio":       round(vol_ratio, 2),
             "effective_vol_ratio": round(effective_vol_ratio, 2),
+            "daily_bar_complete": daily_bar_complete,
+            "median_traded_value_20d": round(float(median_traded_value_20d), 2),
             "high_52w":           round(high_52w, 2),
             "low_52w":            round(low_52w, 2),
             "pct_from_52w_high":  round(pct_from_52w_high, 2),
@@ -1149,6 +1303,13 @@ class StockScreener:
                   "suppressed under fail-closed policy.")
         print()
 
+        # 21-bar NIFTY return consumed only by the optional pilot-buy path.
+        nifty_r21 = None
+        try:
+            nifty_r21 = _nifty_return(PILOT_RS_LOOKBACK_BARS)
+        except Exception:
+            nifty_r21 = None
+
         all_results = {style: [] for style in styles}
         total = len(NSE_STOCKS)
 
@@ -1216,6 +1377,12 @@ class StockScreener:
                         if ensemble_score >= BUY_MIN_ENSEMBLE:
                             is_buy, failed_checks = self.evaluate_buy_eligibility(ind, style)
 
+                            if REQUIRE_COMPLETED_DAILY_BAR_FOR_BUY and not ind.get("daily_bar_complete", False):
+                                is_buy = False
+                                failed_checks = list(failed_checks) + [
+                                    "Daily bar is incomplete — BUY deferred until post-close confirmation"
+                                ]
+
                             min_technical = MIN_TECHNICAL_SCORE_FOR_BUY.get(style, 65)
                             if score < min_technical:
                                 is_buy = False
@@ -1258,9 +1425,45 @@ class StockScreener:
                             # closure on "unknown" (see market_regime_blocks_buy).
                             regime = market_regime.get("regime", "unknown")
                             regime_blocks, regime_reason = market_regime_blocks_buy(regime)
+                            regime_tier = "Tier 1 (Full Buy)"
+                            position_scale = 1.0
+                            pilot_notes = ""
                             if regime_blocks:
-                                is_buy = False
-                                failed_checks = failed_checks + [regime_reason]
+                                # ── Pilot path (optional) ──────────────────────
+                                # A candidate may become a reduced-size PILOT BUY
+                                # only when the regime filter is its SOLE failure
+                                # and it clears stricter stock-level filters
+                                # (own 50d/200d EMAs, RS vs NIFTY, high-volume
+                                # breakout, EPS growth when reported).
+                                # Missing NIFTY data is a risk-control failure, not a
+                                # bearish regime eligible for a discretionary pilot.
+                                if regime == "bearish" and pilot_gate_eligible(failed_checks, anomaly):
+                                    pilot_ok, pilot_fails, p_notes = pilot_conditions_met(
+                                        ind, fundamentals, nifty_r21,
+                                        close=df["Close"], high=df["High"])
+                                    if pilot_ok:
+                                        is_buy = True
+                                        regime_tier = "Tier 2 (Pilot Buy)"
+                                        position_scale = PILOT_POSITION_SCALE
+                                        pilot_notes = (
+                                            "NIFTY below EMA50 — upgraded to PILOT BUY "
+                                            "under stricter filters: "
+                                            + ("; ".join(p_notes) or "all stock-level filters met")
+                                        )
+                                        failed_checks = []
+                                    else:
+                                        is_buy = False
+                                        regime_tier = "Tier 0 (No Buy)"
+                                        failed_checks = failed_checks + [
+                                            regime_reason + " — pilot filters missed: "
+                                            + ("; ".join(pilot_fails) or "insufficient data")
+                                        ]
+                                else:
+                                    is_buy = False
+                                    regime_tier = "Tier 0 (No Buy)"
+                                    failed_checks = failed_checks + [regime_reason]
+                            elif not is_buy:
+                                regime_tier = "Tier 0 (No Buy)"
 
                             # Earnings-event filter: suppress BUY within blackout window
                             earnings_risk = check_earnings_risk(symbol)
@@ -1270,6 +1473,13 @@ class StockScreener:
                                     f"Earnings event on {earnings_risk.get('earnings_date', '?')} "
                                     f"({earnings_risk.get('days_to_earnings', '?')} days away) — gap risk"
                                 ]
+
+                            # Tier represents the final actionable state. A later
+                            # earnings blackout must not leave a rejected row
+                            # labelled as a Pilot/Full Buy.
+                            if not is_buy:
+                                regime_tier = "Tier 0 (No Buy)"
+                                position_scale = 1.0
 
                             outobj = {
                                 "symbol":    symbol.replace(".NS", ""),
@@ -1296,6 +1506,9 @@ class StockScreener:
                                 "recommendation": "BUY" if is_buy else "WATCHLIST",
                                 "selection_decision": "BUY" if is_buy else "WATCHLIST",
                                 "eligibility_failures": failed_checks,
+                                "regime_tier": regime_tier,
+                                "position_scale": round(position_scale, 2),
+                                "pilot_notes": pilot_notes or None,
                                 "sector": sector,
                                 "market_regime": market_regime.get("regime", "unknown"),
                                 **ind

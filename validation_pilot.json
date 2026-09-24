@@ -1,0 +1,62 @@
+{
+  "generated_at": "2026-09-23T18:43:20",
+  "method": "Necessary-condition replay of the pilot filters on frozen daily OHLCV. Regime: NIFTY<EMA50 only. NOT a full-gate backtest; the live deterministic gate is stricter, so these are ceilings.",
+  "config": {
+    "ENABLE_PILOT_BUYS": true,
+    "PILOT_MIN_RS_VS_NIFTY": 1.1,
+    "PILOT_BREAKOUT_VOLUME_RATIO": 1.5,
+    "PILOT_MIN_EPS_GROWTH": 0.15,
+    "min_signal_sample": 30
+  },
+  "baselines_suppressed_days": {
+    "universe_win_pct_f5": 53.75,
+    "universe_n": 63199,
+    "above_own_emas_win_pct_f5": 53.88,
+    "above_own_emas_n": 20082
+  },
+  "pinned_live_config_key": "rs1.10/vol1.5",
+  "pinned_live_config": {
+    "n_signals": 635,
+    "win_pct_f5": 49.92,
+    "median_alpha_f10": -0.004,
+    "mean_alpha_f10": -0.002
+  },
+  "sweep": {
+    "rs1.00/vol1.0": {
+      "n_signals": 1816,
+      "win_pct_f5": 50.99,
+      "median_alpha_f10": -0.002,
+      "mean_alpha_f10": -0.001
+    },
+    "rs1.00/vol1.5": {
+      "n_signals": 1290,
+      "win_pct_f5": 50.7,
+      "median_alpha_f10": -0.003,
+      "mean_alpha_f10": -0.003
+    },
+    "rs1.10/vol1.0": {
+      "n_signals": 860,
+      "win_pct_f5": 49.88,
+      "median_alpha_f10": -0.001,
+      "mean_alpha_f10": 0.001
+    },
+    "rs1.10/vol1.5": {
+      "n_signals": 635,
+      "win_pct_f5": 49.92,
+      "median_alpha_f10": -0.004,
+      "mean_alpha_f10": -0.002
+    },
+    "rs1.15/vol1.0": {
+      "n_signals": 488,
+      "win_pct_f5": 49.59,
+      "median_alpha_f10": -0.004,
+      "mean_alpha_f10": -0.002
+    },
+    "rs1.15/vol1.5": {
+      "n_signals": 364,
+      "win_pct_f5": 50.0,
+      "median_alpha_f10": -0.007,
+      "mean_alpha_f10": -0.005
+    }
+  }
+}

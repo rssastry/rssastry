@@ -60,8 +60,33 @@ latest scan.
 Note: scans commit only small text/CSV outputs (price files, JSON reports,
 snapshots) so the repo stays manageable. The ai_analysis results reflect the
 deterministic gates — a *bearish market regime (NIFTY below EMA50) suppresses
-all BUYs by design*, so a zero-BUY report is usually the filter working, not
-a deployment failure.
+all BUYs by design* unless a candidate qualifies for the stricter reduced-size
+**Tier 2 Pilot BUY** path (`ENABLE_PILOT_BUYS` in config.py): a stock that
+already passes every other gate, trades above its own 50d/200d EMAs, shows
+relative strength vs NIFTY (≥ 1.10x), a high-volume breakout (≥ 1.5x of its
+20-day average) and EPS growth ≥ 15% when reported — sized at 30% of a normal
+position. So a zero-BUY report usually means the filters are working, not a
+deployment failure.
+
+### Measuring pilot confidence (`validate_pilot.py`)
+
+Before trusting the pilot thresholds, quantify them against your own frozen
+history. `validate_pilot.py` replays every NIFTY<EMA50 day from
+`raw_data/prices` (network-free, anti-lookahead) and answers: *did the stocks
+that pass the pilot filters actually beat the index afterwards?* It reports
+win-rates, alpha vs NIFTY, a threshold sweep (RS × volume), and baselines for
+the suppressed universe and the above-own-EMAs subset:
+
+```text
+.venv\Scripts\python.exe validate_pilot.py --out validation_pilot.json
+```
+
+On the current frozen file (200 symbols × ~5y, NIFTY<EMA50 only):
+`win@5` for the suppressed universe ≈ 53.8%, above-own-EMAs ≈ 53.9%, but the
+pilot cells (RS 1.10 × vol 1.5) land at ≈ 49.9% with median alpha@10 ≈ 0.
+**Verdict currently: the marginal pilot filters do not yet demonstrate edge —
+use the sweep to re-tune, and treat any live pilot signal as paper-size until
+a re-tuned variant shows ≥ a few pp lift on hold-out regime days.**
 
 ### Paid-plan alternative — persistent disk
 

@@ -69,6 +69,27 @@ MARKET_REGIME_LOOKBACK = 20
 MARKET_REGIME_EMA = 50
 MIN_MARKET_ABOVE_EMA_PCT = 0.0  # NIFTY must be at/above its EMA50 to allow new buys
 
+# ── Pilot-buy path (optional relaxation of the market-regime gate) ──────
+# While NIFTY sits below its 50-day EMA the deterministic gate blocks ALL
+# fresh BUYs (fail-closed). To surface selective leaders during a correction
+# instead of an empty dashboard, a candidate may be upgraded to a reduced-size
+# "Tier 2 Pilot BUY" when the regime filter is its ONLY failure AND it passes
+# stricter stock-level filters (own 50d/200d EMAs, relative strength vs NIFTY,
+# high-volume breakout, EPS growth when the provider reports it). Flip
+# This remains OFF until a full walk-forward test (next-session execution,
+# costs, stops and portfolio limits) demonstrates a positive out-of-sample edge.
+ENABLE_PILOT_BUYS = False
+PILOT_POSITION_SCALE = 0.30            # pilot buys are sized at 30% of normal
+PILOT_RS_LOOKBACK_BARS = 21            # ≈ 1 trading month; calibrate in walk-forward tests
+# Price-relative-strength ratio: (1 + stock return) / (1 + NIFTY return).
+# 1.10 means the stock's indexed price is 10% ahead of NIFTY over the lookback.
+PILOT_MIN_RS_VS_NIFTY = 1.10
+PILOT_BREAKOUT_VOLUME_RATIO = 1.50     # breakout day volume >= 150% of 20d avg
+PILOT_MIN_EPS_GROWTH = 0.15            # trailing EPS growth floor (advisory when absent)
+# Median value traded over the 20 *completed* sessions before the signal bar.
+# ₹5 crore is a minimum liquidity floor, not an assessment of market impact.
+PILOT_MIN_20D_TRADED_VALUE = 5_00_00_000
+
 # Entry confirmation thresholds. ADX 20 is the minimum tradeable trend; ADX 25
 # is the stronger-trend exception used when a positional setup has no fresh
 # crossover. Volume buffers are style-specific because short-term entries need
@@ -157,6 +178,10 @@ MAX_FUNDAMENTAL_PE = 60
 # The application currently supplies daily OHLCV only. Daily bars cannot
 # support an honest intraday recommendation.
 ALLOW_DAILY_BAR_INTRADAY_BUY = False
+# A daily signal is actionable only after the NSE close buffer has confirmed
+# that day's OHLCV bar. This prevents a dashboard-triggered mid-session scan
+# from issuing a BUY on incomplete price/volume data.
+REQUIRE_COMPLETED_DAILY_BAR_FOR_BUY = True
 
 # AI is a real second opinion (veto), not a label: if the AI read is SELL/HOLD,
 # UNKNOWN, or a BUY with confidence below this floor, the deterministic BUY is

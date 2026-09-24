@@ -13,7 +13,8 @@ Regression tests for the buy-gate safety guards added after the SUNPHARMA
 from config import (VOLUME_CONFIRMATION_MARGIN, MARKET_REGIME_FAIL_CLOSED,
                     MAX_STOP_DISTANCE_PCT_BY_STYLE, ATR_MULT)
 from screener import (StockScreener, market_regime_blocks_buy,
-                      inherit_strict_style_failures, fundamental_buy_gate)
+                      inherit_strict_style_failures, fundamental_buy_gate,
+                      pilot_conditions_met, pilot_gate_eligible)
 
 
 def _passing_stock(**overrides):
@@ -343,3 +344,131 @@ def test_wide_atr_stop_blocked_at_new_cap():
     )
     assert not ok2
     assert any("ATR stop distance too wide" in f for f in fails2)
+
+
+# ── Pilot-buy path (NIFTY below EMA50) ───────────────────────────────────
+# pilot_conditions_met decides whether a candidate whose ONLY buy-gate failure
+# is the market-regime filter may be upgraded to a reduced-size PILOT BUY.
+
+def _pilot_ind(**overrides):
+    ind = {
+        "current_price": 1960.0,
+        "ema50": 1900.0,
+        "ema200": 1800.0,
+        "resistance_1": 1950.0,
+        "volume_ratio": 2.0,
+        "effective_vol_ratio": 2.0,
+        "daily_bar_complete": True,
+        "median_traded_value_20d": 10_00_00_000,
+    }
+    ind.update(overrides)
+    return ind
+
+
+def test_pilot_approves_when_all_strict_filters_pass():
+    # Stock +10% in 21 bars vs NIFTY -5% => RS ≈ 1.16x >= 1.10x
+    # Prior 10-session high = 105 < 110, so the volume breakout confirms.
+    close = [100.0] * 21 + [110.0]
+    high = [105.0] * 21 + [111.0]
+    ok, fails, notes = pilot_conditions_met(
+        _pilot_ind(), {"earningsGrowth": 0.25}, nifty_return=-0.05,
+        close=close, high=high)
+    assert ok, fails
+    assert any("RS vs NIFTY" in n for n in notes)
+    assert any("breakout" in n for n in notes)
+
+
+def test_pilot_blocks_when_relative_strength_too_low():
+    # Stock flat while NIFTY rose => RS < 1.10x required.
+    close = [100.0] * 21 + [100.0]
+    ok, fails, _ = pilot_conditions_met(
+        _pilot_ind(), {"earningsGrowth": 0.25}, nifty_return=0.05, close=close)
+    assert not ok
+    assert any("RS filter" in f for f in fails)
+
+
+def test_pilot_blocks_when_nifty_benchmark_missing():
+    # Stock return is fine; the NIFTY benchmark is what is unavailable.
+    ok, fails, _ = pilot_conditions_met(
+        _pilot_ind(), {"earningsGrowth": 0.25}, nifty_return=None,
+        close=[100.0] * 21 + [110.0])
+    assert not ok
+    assert any("NIFTY benchmark" in f for f in fails)
+
+
+def test_pilot_requires_completed_bar_and_liquidity():
+    close = [100.0] * 21 + [110.0]
+    high = [105.0] * 21 + [111.0]
+    ok, fails, _ = pilot_conditions_met(
+        _pilot_ind(daily_bar_complete=False, median_traded_value_20d=1_00_00_000),
+        {"earningsGrowth": 0.25}, nifty_return=-0.05, close=close, high=high)
+    assert not ok
+    assert any("completed daily breakout bar" in f for f in fails)
+    assert any("liquidity filter" in f for f in fails)
+
+
+def test_pilot_requires_resistance_history():
+    ok, fails, _ = pilot_conditions_met(
+        _pilot_ind(), {"earningsGrowth": 0.25}, nifty_return=-0.05,
+        close=[100.0] * 21 + [110.0])
+    assert not ok
+    assert any("breakout-volume" in f for f in fails)
+
+
+def test_pilot_blocks_when_breakout_volume_too_low():
+    ok, fails, _ = pilot_conditions_met(
+        _pilot_ind(volume_ratio=1.2, effective_vol_ratio=1.2),
+        {"earningsGrowth": 0.25}, nifty_return=-0.05,
+        close=[100.0] * 21 + [110.0], high=[105.0] * 21 + [111.0])
+    assert not ok
+    assert any("breakout-volume" in f for f in fails)
+
+
+def test_pilot_blocks_when_close_not_above_prior_resistance():
+    # Volume is huge but the close (108) is still BELOW yesterday's 10-day
+    # high (111) -- not a breakout, must not qualify. Synthetic prices must be
+    # internally consistent with ind['current_price'] (108) so only the
+    # breakout leg fails.
+    close = [100.0] * 21 + [108.0]
+    high = [111.0] * 21 + [112.0]
+    ok, fails, _ = pilot_conditions_met(
+        _pilot_ind(current_price=108.0, ema50=100.0, ema200=90.0),
+        {"earningsGrowth": 0.25}, nifty_return=-0.05,
+        close=close, high=high)
+    assert not ok
+    assert any("breakout" in f for f in fails)
+
+
+def test_pilot_requires_stock_above_own_200day_ema():
+    ok, fails, _ = pilot_conditions_met(
+        _pilot_ind(ema200=1970.0), {"earningsGrowth": 0.25}, nifty_return=-0.05,
+        close=[100.0] * 21 + [110.0])
+    assert not ok
+    assert any("200-day EMA" in f for f in fails)
+
+
+def test_pilot_eps_growth_floor_blocks_when_reported_low():
+    ok, fails, _ = pilot_conditions_met(
+        _pilot_ind(), {"earningsGrowth": 0.05}, nifty_return=-0.05,
+        close=[100.0] * 21 + [110.0])
+    assert not ok
+    assert any("EPS growth" in f for f in fails)
+
+
+def test_pilot_eps_growth_missing_is_advisory_not_blocking():
+    ok, fails, notes = pilot_conditions_met(
+        _pilot_ind(), {"returnOnEquity": 0.2}, nifty_return=-0.05,
+        close=[100.0] * 21 + [110.0], high=[105.0] * 21 + [111.0])
+    assert ok, fails
+    assert any("advisory" in n for n in notes)
+
+
+def test_pilot_gate_eligible_regime_must_be_sole_failure():
+    """Regression: a fully-qualified candidate has FAILED_CHECKS == [] at the
+    regime point; the pilot path may only rescue THAT case, never one that
+    carries another (non-regime) failure."""
+    assert pilot_gate_eligible([], anomaly=False, enabled=True) is True
+    assert pilot_gate_eligible([], anomaly=False) is False         # disabled by default
+    assert pilot_gate_eligible(["some other failure"], anomaly=False) is False
+    assert pilot_gate_eligible([], anomaly=True) is False
+    assert pilot_gate_eligible([], anomaly=False, enabled=False) is False

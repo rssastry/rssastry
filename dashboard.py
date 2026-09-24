@@ -609,10 +609,12 @@ def build_buy_order(symbol, analysis_price, atr, cash, tp=None, stop_rc=None,
     }
 
 
-def validate_manual_analysis_buy(indicators, symbol, style, ai_recommendation):
-    """Re-run the deterministic BUY approval before manual analysis can add."""
+def validate_manual_analysis_buy(indicators, symbol, style, ai_recommendation=None,
+                                require_ai: bool = True):
+    """Re-run the production BUY gate before a manual portfolio entry."""
     from config import (MIN_TECHNICAL_SCORE_FOR_BUY,
-                        ALLOW_DAILY_BAR_INTRADAY_BUY)
+                        ALLOW_DAILY_BAR_INTRADAY_BUY, BUY_MIN_ENSEMBLE,
+                        REQUIRE_COMPLETED_DAILY_BAR_FOR_BUY)
     from screener import (StockScreener, check_market_regime,
                           fundamental_buy_gate, market_regime_blocks_buy)
     from fundamental_snapshots import resolve_provider_ticker, merge_fundamental_snapshots
@@ -620,8 +622,15 @@ def validate_manual_analysis_buy(indicators, symbol, style, ai_recommendation):
 
     failures = []
     screener = StockScreener()
-    if ai_recommendation != "BUY":
+    if require_ai and ai_recommendation != "BUY":
         failures.append(f"AI recommendation is {ai_recommendation or 'unknown'}, not BUY")
+
+    if indicators.get("data_anomaly"):
+        failures.append(str(indicators["data_anomaly"]))
+    if REQUIRE_COMPLETED_DAILY_BAR_FOR_BUY and not indicators.get("daily_bar_complete", False):
+        failures.append("Daily bar is incomplete — BUY deferred until post-close confirmation")
+    if not screener.passes_filter(indicators, style):
+        failures.append("Stock does not pass the style's liquidity/volatility setup filter")
 
     try:
         technical_score, _ = screener.score_stock(indicators, style)
@@ -650,6 +659,11 @@ def validate_manual_analysis_buy(indicators, symbol, style, ai_recommendation):
             )[0],
         ]
         quality_score = sum(scores) / len(scores)
+        ensemble_score = int(round(technical_score * 0.70 + quality_score * 0.30))
+        if ensemble_score < BUY_MIN_ENSEMBLE:
+            failures.append(
+                f"Ensemble score {ensemble_score} below {BUY_MIN_ENSEMBLE} BUY floor"
+            )
         fundamental_ok, fundamental_failures = fundamental_buy_gate(
             fundamentals, quality_score, sector=sector
         )
@@ -1161,6 +1175,7 @@ elif "Picks" in page:
                         for item in watchlist:
                             rows.append({
                                 "Symbol": item.get("symbol", ""),
+                                "Regime tier": item.get("regime_tier", ""),
                                 "Score": item.get("ensemble_score", ""),
                                 "Decision": item.get("selection_decision", item.get("recommendation", "")),
                                 "AI view": item.get("ai_recommendation", "Not available"),
@@ -1421,7 +1436,8 @@ elif "Picks" in page:
                                 ind_for_pos = p.get('indicators', {}) or {}
                                 price_for_pos = ep.get('ideal', 0) or ind_for_pos.get('current_price', 0)
                                 atr_for_pos = ind_for_pos.get('atr')
-                                cash = st.session_state.get('cash_per_trade', 100000)
+                                _scale = float(p.get('position_scale', 1.0) or 1.0)
+                                cash = float(st.session_state.get('cash_per_trade', 100000)) * _scale
                                 order = build_buy_order(sym, price_for_pos, atr_for_pos, cash,
                                                         tp=tp, stop_rc=p.get('stop_loss'), style=style)
                                 qty_suggest = int(order.get('qty', 0))
@@ -1437,10 +1453,11 @@ elif "Picks" in page:
                                 except Exception:
                                     pass
                                 live_txt = f" • live ₹{order.get('live_price')}" if order.get('live_price') else ''
+                                pilot_tag = " • PILOT (30% size)" if _scale < 1.0 else ""
                                 st.markdown(
                                     f"<div style='font-size:12px;color:#9fb3c8'>"
                                     f"Suggested: qty {qty_suggest} • stop ₹{stop_suggest} • "
-                                    f"target ₹{order.get('target','?')} • R:R {order.get('rr','?')}{live_txt}"
+                                    f"target ₹{order.get('target','?')} • R:R {order.get('rr','?')}{live_txt}{pilot_tag}"
                                     f"</div>", unsafe_allow_html=True)
                                 if add_disabled:
                                     st.warning(f"⚠️ Add blocked: {order.get('reason')}")
@@ -1520,6 +1537,26 @@ elif "Portfolio" in page:
                 if price_use <= 0:
                     st.error("❌ No usable price — enter a Buy Price or a live quote is required.")
                 else:
+                    # Manual entries must pass the same live deterministic gate.
+                    # This form intentionally does not fabricate an AI verdict;
+                    # it records a deterministic, discretionary entry only.
+                    try:
+                        _manual_screener = StockScreener()
+                        _manual_df = _manual_screener.fetch_stock_data(sym_clean + ".NS")
+                        if _manual_df is None:
+                            gate_ok, gate_failures = False, ["Could not load current daily data"]
+                        else:
+                            _manual_ind = _manual_screener.compute_indicators(_manual_df)
+                            gate_ok, gate_failures = validate_manual_analysis_buy(
+                                _manual_ind, sym_clean + ".NS", sty, require_ai=False
+                            )
+                    except Exception as exc:
+                        gate_ok, gate_failures = False, [f"Manual BUY validation failed: {exc}"]
+                    if not gate_ok:
+                        st.error("Manual BUY blocked:\n" + "\n".join(
+                            f"- {failure}" for failure in gate_failures
+                        ))
+                        st.stop()
                     use_qty = int(qty)
                     use_tgt = tgt
                     use_sl = sl
@@ -1899,7 +1936,7 @@ elif "Analyze" in page:
                             add_holding = None
                         price_for_pos = ep.get('ideal', 0) or ind.get('current_price', 0)
                         atr_for_pos = ind.get('atr')
-                        cash = st.session_state.get('cash_per_trade', 100000)
+                        cash = float(st.session_state.get('cash_per_trade', 100000)) * float(result.get('position_scale', 1.0) or 1.0)
                         order = build_buy_order(sym_clean, price_for_pos, atr_for_pos, cash,
                                                 tp=tp, stop_rc=result.get('stop_loss'), style=style)
                         qty_suggest = int(order.get('qty', 0))
@@ -2057,10 +2094,12 @@ elif "Screener Results" in page:
                         rows.append({
                             'Symbol': s.get('symbol',''),
                             'Decision': s.get('recommendation',''),
+                            'Regime tier': s.get('regime_tier',''),
                             'Price': s.get('current_price',''),
                             'RSI': s.get('rsi',''),
                             'Vol Ratio': s.get('volume_ratio',''),
                             'Score': s.get('ensemble_score', s.get('score','')),
+                            'Pilot checks': s.get('pilot_notes') or '',
                             'Why not qualified': "; ".join(s.get('eligibility_failures', [])) or "",
                         })
                     import pandas as _pd
@@ -2110,7 +2149,7 @@ elif "Screener Results" in page:
                                     add_holding = None
                                 price_for_pos = s.get('current_price')
                                 atr_for_pos = s.get('atr')
-                                cash = st.session_state.get('cash_per_trade', 100000)
+                                cash = float(st.session_state.get('cash_per_trade', 100000)) * float(s.get('position_scale', 1.0) or 1.0)
                                 order = build_buy_order(s.get('symbol'), price_for_pos, atr_for_pos, cash,
                                         tp={'T1': s.get('target'), 'T2': s.get('target')}, stop_rc=s.get('stop_loss'), style=style)
                                 qty_suggest = int(order.get('qty', 0))
