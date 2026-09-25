@@ -472,3 +472,41 @@ def test_pilot_gate_eligible_regime_must_be_sole_failure():
     assert pilot_gate_eligible(["some other failure"], anomaly=False) is False
     assert pilot_gate_eligible([], anomaly=True) is False
     assert pilot_gate_eligible([], anomaly=False, enabled=False) is False
+def test_passes_filter_tolerates_change_pct_only_shape():
+    """Analyze-page payloads come from IndicatorEngine.compute_all() which
+    emits 'change_pct' (no 'price_change_pct'). passes_filter must not raise
+    KeyError and must still enforce the daily-move cap via the alias."""
+    screener = StockScreener()
+    ind = {
+        "current_price": 1000.0,
+        "avg_volume_20d": 3_000_000,
+        "rsi": 55.0,
+        "change_pct": 1.5,          # IndicatorEngine shape: no price_change_pct
+        "atr_pct": 1.1,
+        "pct_from_52w_high": -20.0,
+    }
+    assert screener.passes_filter(ind, "swing") is True
+    ind["change_pct"] = -9.0        # beyond swing's 8% move cap => reject
+    assert screener.passes_filter(ind, "swing") is False
+
+
+def test_indicator_engine_emits_price_change_pct_alias():
+    """IndicatorEngine.compute_all must expose the canonical key that the
+    deterministic gate / passes_filter expect (regression for the Analyze
+    page KeyError)."""
+    import numpy as np
+    import pandas as pd
+
+    from indicators import IndicatorEngine
+
+    idx = pd.bdate_range("2024-01-01", periods=260)
+    close = np.linspace(100.0, 140.0, 260)
+    engine = IndicatorEngine("TEST.NS")
+    engine.df = pd.DataFrame(
+        {"Open": close, "High": close + 1.0, "Low": close - 1.0,
+         "Close": close, "Volume": np.full(260, 1_000_000.0)},
+        index=idx,
+    )
+    out = engine.compute_all()
+    assert out.get("price_change_pct") is not None
+    assert out["price_change_pct"] == out["change_pct"]

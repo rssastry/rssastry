@@ -1119,11 +1119,15 @@ class StockScreener:
     def passes_filter(self, ind: dict, style: str) -> bool:
         c = SCREEN_CRITERIA[style]
         p = ind["current_price"]
+        # price_change_pct is the canonical key; tolerate the change_pct-only
+        # shape produced by IndicatorEngine.compute_all (defensive — a missing
+        # key must never take down the whole Analyze page as a KeyError).
+        price_move = ind.get("price_change_pct", ind.get("change_pct", 0)) or 0
         return (
             c["min_price"] <= p <= c["max_price"]
             and ind["avg_volume_20d"] >= c["min_volume"]
             and c["rsi_min"] <= ind["rsi"] <= c["rsi_max"]
-            and abs(ind["price_change_pct"]) <= c["max_price_change_pct"]
+            and abs(price_move) <= c["max_price_change_pct"]
             and ind["atr_pct"] >= c["min_atr_pct"]
             and ind["pct_from_52w_high"] >= -45
         )

@@ -465,6 +465,9 @@ class IndicatorEngine:
             "open_price":        round(open_price, 2),
             "prev_close":        round(prev, 2),
             "change_pct":        round(change_pct, 2),
+            # Canonical alias consumed by the deterministic gate and the
+            # screener's passes_filter (screener.compute_indicators emits both).
+            "price_change_pct":  round(change_pct, 2),
             "gap_pct":           round(gap_pct, 2),
             "high_today":        round(high.iloc[-1], 2),
             "low_today":         round(low.iloc[-1], 2),
