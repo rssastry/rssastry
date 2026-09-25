@@ -127,6 +127,23 @@ def format_morning_summary(all_analysis: dict) -> str:
             )
 
     lines.append(f"\nTime: {datetime.now().strftime('%H:%M IST')}")
+
+    # Watchlist that would qualify but for the market-regime filter: the scan
+    # tags these with watchlist_promotable (e.g. COALINDIA-type names).
+    promote = [p for style, picks in all_analysis.items()
+               if isinstance(picks, list)
+               for p in picks if isinstance(p, dict) and p.get("watchlist_promotable")]
+    if promote:
+        lines.append("\n<b>WATCHLIST - BLOCKED ONLY BY MARKET REGIME</b>")
+        for i, p in enumerate(promote[:8], 1):
+            ep = p.get("entry_price", {})
+            lines.append(
+                f"  {i}. <b>{p.get('symbol','')}</b> | "
+                f"Entry Rs.{ep.get('ideal',0)} | "
+                f"Style {p.get('trading_style', p.get('style',''))}"
+            )
+        lines.append("  (NIFTY below EMA50 -- trade only with reduced size)")
+
     return "\n".join(lines)
 
 
@@ -162,6 +179,107 @@ def send_buy_alert(analysis: dict):
     if ok:
         print(f"  Telegram alert sent: "
               f"{analysis.get('symbol')} {analysis.get('recommendation')}")
+
+
+# ─────────────────────────────────────────────
+# Watchlist buy-level monitoring
+# ─────────────────────────────────────────────
+def get_live_price_now(symbol: str, interval: str = "1m") -> float:
+    """Live intraday quote for one symbol; 0.0 on any failure."""
+    try:
+        from fundamental_snapshots import resolve_provider_ticker
+        import yfinance as yf
+        local = symbol if ".NS" in symbol else symbol + ".NS"
+        df = yf.Ticker(resolve_provider_ticker(local)).history(
+            period="1d", interval=interval)
+        if df is not None and not df.empty:
+            return round(float(df["Close"].iloc[-1]), 2)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _watchlist_state_file() -> str:
+    import paths
+    from config import CACHE_DIR
+    return os.path.join(CACHE_DIR, "watchlist_alerts_fired.json")
+
+
+def check_watchlist_price_alerts(analysis: dict = None, tolerance_pct: float = 1.0) -> dict:
+    """Fire ONE-TIME Telegram alerts when a candidate trades at its computed
+    ``buy_alert_at`` level.
+
+    The analysis already produces buy levels for every candidate but nothing
+    monitored them -- users were left to eyeball watchlists manually (the
+    COALINDIA experience). This closes that gap. Alert state is persisted
+    under CACHE_DIR so each level fires only once until the level changes.
+
+    Returns {"fired": [symbols], "checked": n, "failed": [symbols]}.
+    """
+    import time
+    import paths
+    if analysis is None:
+        try:
+            with open(paths.path("ai_analysis.json")) as fh:
+                data = json.load(fh)
+            analysis = data.get("analysis", {})
+        except Exception:
+            return {"fired": [], "checked": 0, "failed": [], "error": "no analysis"}
+
+    candidates: dict = {}
+    for style, picks in analysis.items():
+        if not isinstance(picks, list):
+            continue
+        for p in picks:
+            if not isinstance(p, dict):
+                continue
+            level = (p.get("alert_on_price") or {}).get("buy_alert_at")
+            sym = p.get("symbol")
+            if not sym or not level:
+                continue
+            candidates.setdefault(sym, {
+                "level": float(level),
+                "style": p.get("trading_style") or p.get("style", ""),
+                "rec": p.get("recommendation", ""),
+            })
+
+    state_file = _watchlist_state_file()
+    fired_state = {}
+    if os.path.exists(state_file):
+        try:
+            with open(state_file) as fh:
+                fired_state = json.load(fh)
+        except Exception:
+            fired_state = {}
+
+    fired, failed = [], []
+    for sym, info in candidates.items():
+        live = get_live_price_now(sym)
+        if live <= 0:
+            failed.append(sym)
+            continue
+        hit = abs(live - info["level"]) / info["level"] <= tolerance_pct / 100.0
+        key = f"{sym}:{info['style']}:{info['level']}"
+        if hit and not fired_state.get(key):
+            send_telegram(
+                f"<b>WAIT BUY LEVEL HIT - {sym}</b>\n"
+                f"Live Rs.{live} is at your buy level Rs.{info['level']}\n"
+                f"Watchlist rec: {info['rec']} | style: {info['style']}\n"
+                f"Time: {datetime.now().strftime('%H:%M IST')}"
+            )
+            fired_state[key] = datetime.now().isoformat(timespec="seconds")
+            fired.append(sym)
+        time.sleep(0.4)
+
+    try:
+        parent = os.path.dirname(state_file)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(state_file, "w") as fh:
+            json.dump(fired_state, fh, indent=2, sort_keys=True)
+    except Exception:
+        pass
+    return {"fired": fired, "checked": len(candidates), "failed": failed}
 
 
 def send_portfolio_alert(result: dict):

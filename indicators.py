@@ -13,7 +13,8 @@ import yfinance as yf
 import warnings
 from config import (BREAKDOWN_LOOKBACK_BARS, BREAKDOWN_RESOLUTION_LOOKBACK,
                     CRASH_DAY_PCT, CRASH_DAY_VOL_MULT,
-                    FRESH_TRIGGER_BARS, BOUNCE_HIST_MIN_SAMPLES, MAX_VOLUME_RATIO)
+                    FRESH_TRIGGER_BARS, BOUNCE_HIST_MIN_SAMPLES, MAX_VOLUME_RATIO,
+                    BREAKOUT_TRIGGER_VOL_RATIO, BREAKOUT_TRIGGER_LOOKBACK_BARS)
 warnings.filterwarnings("ignore")
 
 
@@ -250,6 +251,12 @@ class IndicatorEngine:
         # Volume
         avg_vol   = vol.iloc[-20:].mean()
         vol_ratio = vol.iloc[-1] / avg_vol if avg_vol > 0 else 0
+        # New-high breakout context: close above the PRIOR 10-session high
+        # on strong volume (optional swing trigger -- see ALLOW_BREAKOUT_TRIGGER).
+        prior_high = high.iloc[-(BREAKOUT_TRIGGER_LOOKBACK_BARS + 1):-1].max()
+        volume_breakout = bool(
+            current > prior_high and vol_ratio >= BREAKOUT_TRIGGER_VOL_RATIO
+        )
         obv       = OnBalanceVolumeIndicator(close, vol).on_balance_volume()
         obv_trend = "rising" if obv.iloc[-1] > obv.iloc[-5] else "falling"
 
@@ -509,6 +516,8 @@ class IndicatorEngine:
             "volume":            int(vol.iloc[-1]),
             "avg_volume_20d":    int(avg_vol),
             "volume_ratio":      round(vol_ratio, 2),
+            "prior_10_sessions_high": round(float(prior_high), 2),
+            "volume_breakout":   volume_breakout,
             "obv_trend":         obv_trend,
             # EMA crossover rules
             "buy_rule_passed":   buy_rule_passed,

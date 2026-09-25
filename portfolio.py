@@ -158,15 +158,9 @@ def check_portfolio_risk(symbol: str, sector: str = None, cash: float = None,
 def validate_holding_fields(symbol: str, buy_price: float, quantity: int,
                             target: float, stop_loss: float,
                             style: str = None) -> tuple[bool, list[str]]:
-    """Basic validation for holding fields.
-
-    Quantity, buy price and style are enforced. `target` and `stop_loss` are
-    intentionally NOT validated — they are informational bookkeeping values and
-    must never block adding/updating a stock in the portfolio.
-
-    Returns (is_valid, list_of_failure_messages).
-    """
-    from config import MIN_QUANTITY
+    """Validate an actionable holding, including its predefined loss limit."""
+    from config import (MIN_QUANTITY, MIN_STOP_LOSS_PCT, MAX_STOP_LOSS_PCT,
+                        MIN_TARGET_PCT, MAX_TARGET_PCT, MIN_RISK_REWARD)
     failures = []
 
     if quantity is None or int(quantity) < MIN_QUANTITY:
@@ -174,6 +168,37 @@ def validate_holding_fields(symbol: str, buy_price: float, quantity: int,
 
     if buy_price is None or float(buy_price) <= 0:
         failures.append("buy_price must be > 0")
+
+    try:
+        entry = float(buy_price)
+        stop = float(stop_loss)
+        target_price = float(target)
+        if stop <= 0 or stop >= entry:
+            failures.append("stop_loss must be positive and below buy_price")
+        else:
+            stop_pct = (entry - stop) / entry * 100
+            if not MIN_STOP_LOSS_PCT <= stop_pct <= MAX_STOP_LOSS_PCT:
+                failures.append(
+                    f"stop_loss distance {stop_pct:.1f}% must be within "
+                    f"{MIN_STOP_LOSS_PCT:.1f}%–{MAX_STOP_LOSS_PCT:.1f}%"
+                )
+        if target_price <= entry:
+            failures.append("target must be above buy_price")
+        else:
+            target_pct = (target_price - entry) / entry * 100
+            if not MIN_TARGET_PCT <= target_pct <= MAX_TARGET_PCT:
+                failures.append(
+                    f"target distance {target_pct:.1f}% must be within "
+                    f"{MIN_TARGET_PCT:.1f}%–{MAX_TARGET_PCT:.1f}%"
+                )
+        if stop > 0 and stop < entry and target_price > entry:
+            rr = (target_price - entry) / (entry - stop)
+            if rr < MIN_RISK_REWARD:
+                failures.append(
+                    f"reward/risk {rr:.2f} is below the {MIN_RISK_REWARD:.1f} minimum"
+                )
+    except (TypeError, ValueError):
+        failures.append("target and stop_loss must be valid positive prices")
 
     if style is not None and style not in ("intraday", "swing", "positional"):
         failures.append(f"style must be one of intraday/swing/positional (got '{style}')")
@@ -184,10 +209,7 @@ def validate_holding_fields(symbol: str, buy_price: float, quantity: int,
 def add_holding(symbol: str, buy_price: float, quantity: int,
                 buy_date: str, target: float, stop_loss: float, style: str,
                 cash: float = None):
-    """Add a holding with basic validation (quantity, buy_price, style).
-
-    `target` and `stop_loss` are stored as informational fields but are not
-    validated — they never block adding a stock to the portfolio.
+    """Add a holding only when its quantity, stop, target and account risk pass.
 
     On failure, the reasons are stored in the module-level `last_add_failures`
     list so callers can display them to the user.
@@ -198,6 +220,18 @@ def add_holding(symbol: str, buy_price: float, quantity: int,
     remove_holding instead) — this prevents accidental double buys.
     """
     global last_add_failures
+
+    # Apply the automation kill-switch to every entry route, not only the
+    # suggestion generator. Fail closed if the breaker cannot be read.
+    try:
+        from circuit_breaker import RiskCircuitBreaker
+        breaker_ok, breaker_reason = RiskCircuitBreaker().pre_trade_check()
+    except Exception as exc:
+        breaker_ok, breaker_reason = False, f"risk circuit breaker unavailable: {exc}"
+    if not breaker_ok:
+        last_add_failures.clear()
+        last_add_failures.append(f"New position blocked: {breaker_reason}")
+        return False
 
     ok, failures = validate_holding_fields(
         symbol, buy_price, quantity, target, stop_loss, style

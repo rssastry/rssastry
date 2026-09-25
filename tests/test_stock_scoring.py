@@ -170,18 +170,20 @@ def test_sweetspot_entry_not_penalized():
     assert not any("Stretched" in s or "overbought" in s.lower() for s in signals)
 
 
-def test_target_and_stoploss_not_validated():
-    """Target & stop-loss must never block adding a stock (informational only).
+def test_target_and_stoploss_are_hard_risk_controls():
+    """An actionable holding must carry a valid stop, target and reward/risk."""
 
-    Covers: bad R:R (risks 3 to earn 2) and stop_loss above target — both used
-    to be rejected by strict risk validation and now must pass."""
-
-    # Bad reward/risk (1.33) — previously rejected
+    # Bad reward/risk (1.33) must be rejected.
     ok, failures = validate_holding_fields("TEST", 100, 10, 104, 97, "swing")
-    assert ok, failures
+    assert not ok
+    assert any("reward/risk" in f for f in failures)
 
-    # stop_loss above target — previously rejected
+    # Stop above entry is invalid.
     ok, failures = validate_holding_fields("TEST", 100, 10, 97, 104, "swing")
+    assert not ok
+    assert any("stop_loss" in f for f in failures)
+
+    ok, failures = validate_holding_fields("TEST", 100, 10, 110, 95, "swing")
     assert ok, failures
 
 

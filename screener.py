@@ -108,7 +108,9 @@ from config import (CROSSOVER_RECENCY_BARS, MAX_VOLUME_RATIO, MIN_DAILY_HISTORY,
                     ENABLE_PILOT_BUYS, PILOT_POSITION_SCALE,
                     PILOT_RS_LOOKBACK_BARS, PILOT_MIN_RS_VS_NIFTY,
                     PILOT_BREAKOUT_VOLUME_RATIO, PILOT_MIN_EPS_GROWTH,
-                    PILOT_MIN_20D_TRADED_VALUE)
+                    PILOT_MIN_20D_TRADED_VALUE,
+                    ALLOW_BREAKOUT_TRIGGER, BREAKOUT_TRIGGER_VOL_RATIO,
+                    BREAKOUT_TRIGGER_LOOKBACK_BARS)
 from indicators import find_unresolved_breakdown
 
 # ─────────────────────────────────────────────
@@ -661,6 +663,12 @@ class StockScreener:
             vol_ratio_prev_day = 0.0
         # Use the more reliable (complete-day) ratio for eligibility checks
         effective_vol_ratio = vol_ratio_prev_day if vol_ratio_prev_day > 0 else vol_ratio
+        # New-high breakout context: close above the PRIOR 10-session high on
+        # strong volume (optional swing trigger; see ALLOW_BREAKOUT_TRIGGER).
+        prior_high = high.iloc[-(BREAKOUT_TRIGGER_LOOKBACK_BARS + 1):-1].max()
+        volume_breakout = bool(
+            current > prior_high and effective_vol_ratio >= BREAKOUT_TRIGGER_VOL_RATIO
+        )
         prior_value = (close.iloc[-21:-1] * vol.iloc[-21:-1]).dropna()
         median_traded_value_20d = prior_value.median() if len(prior_value) >= 20 else 0
         prev_close= close.iloc[-2]
@@ -906,6 +914,8 @@ class StockScreener:
             "avg_volume_20d":     int(avg_vol),
             "volume_ratio":       round(vol_ratio, 2),
             "effective_vol_ratio": round(effective_vol_ratio, 2),
+            "prior_10_sessions_high": round(float(prior_high), 2),
+            "volume_breakout":   volume_breakout,
             "daily_bar_complete": daily_bar_complete,
             "median_traded_value_20d": round(float(median_traded_value_20d), 2),
             "high_52w":           round(high_52w, 2),
@@ -1181,13 +1191,26 @@ class StockScreener:
         # but has no cross is a drift trade with no edge. Positional allows a
         # strong-trend exception: ADX>=25, real volume and weekly confirmation.
         fresh_trigger = bool(ind.get("fresh_bullish_trigger", False))
+        # Optional alternative ignition: a high-volume NEW-HIGH breakout (close
+        # above the prior 10-session high on >= BREAKOUT_TRIGGER_VOL_RATIO
+        # volume) may ignite swing/short-term entries when enabled (in line with
+        # the pilot-buy discipline, this is OFF until validated on frozen history).
+        breakout_trigger = bool(
+            ALLOW_BREAKOUT_TRIGGER
+            and ind.get("volume_breakout", False)
+            and style in ("short_term", "swing"))
+        has_trigger = fresh_trigger or breakout_trigger
         if style in ("intraday", "short_term", "swing"):
-            if not fresh_trigger:
+            if not has_trigger:
+                needs = "MACD line cross or EMA21/50 crossover"
+                if ALLOW_BREAKOUT_TRIGGER:
+                    needs += " or a high-volume new-high breakout (>= " \
+                             f"{BREAKOUT_TRIGGER_VOL_RATIO:g}x vol above prior resistance)"
                 failures.append(
-                    "No fresh bullish trigger within lookback (need MACD line cross "
-                    "or EMA21/50 crossover) — drift without ignition"
+                    f"No fresh bullish trigger within lookback (need {needs}) "
+                    "— drift without ignition"
                 )
-        elif not fresh_trigger:
+        elif not has_trigger:
             strong_trend = float(ind.get("adx", 0) or 0) >= ADX_STRONG_FOR_NO_TRIGGER
             strong_vol = eff_vol >= 1.0
             tf_ok = ind.get("multi_tf_confirm") is not False
@@ -1432,6 +1455,7 @@ class StockScreener:
                             regime_tier = "Tier 1 (Full Buy)"
                             position_scale = 1.0
                             pilot_notes = ""
+                            watchlist_promotable = False
                             if regime_blocks:
                                 # ── Pilot path (optional) ──────────────────────
                                 # A candidate may become a reduced-size PILOT BUY
@@ -1465,6 +1489,12 @@ class StockScreener:
                                 else:
                                     is_buy = False
                                     regime_tier = "Tier 0 (No Buy)"
+                                    # Fully qualified stock-level, suppressed ONLY by
+                                    # the external regime filter -> surface as a
+                                    # promotable watchlist (COALINDIA-type name).
+                                    watchlist_promotable = bool(
+                                        len(failed_checks) == 0 and not anomaly
+                                    )
                                     failed_checks = failed_checks + [regime_reason]
                             elif not is_buy:
                                 regime_tier = "Tier 0 (No Buy)"
@@ -1513,6 +1543,7 @@ class StockScreener:
                                 "regime_tier": regime_tier,
                                 "position_scale": round(position_scale, 2),
                                 "pilot_notes": pilot_notes or None,
+                                "watchlist_promotable": bool(watchlist_promotable),
                                 "sector": sector,
                                 "market_regime": market_regime.get("regime", "unknown"),
                                 **ind

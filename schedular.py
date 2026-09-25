@@ -157,6 +157,16 @@ def job_preclose_check():
 
     log("Pre-close stop loss check...")
     try:
+        # Watchlist buy-level alerts: fire once when a watchlist name trades at
+        # its computed buy level (automates the manual COALINDIA-style tracking).
+        try:
+            from alerts import check_watchlist_price_alerts
+            _res = check_watchlist_price_alerts()
+            if _res.get("fired"):
+                log(f"Watchlist buy-level alerts fired: {', '.join(_res['fired'])}")
+        except Exception as exc:
+            log(f"Watchlist alert check skipped: {exc}")
+
         _portfolio_file = paths.path("portfolio.json")
         if not os.path.exists(_portfolio_file):
             log("No portfolio file found.")

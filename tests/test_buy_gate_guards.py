@@ -510,3 +510,37 @@ def test_indicator_engine_emits_price_change_pct_alias():
     out = engine.compute_all()
     assert out.get("price_change_pct") is not None
     assert out["price_change_pct"] == out["change_pct"]
+
+def test_breakout_trigger_off_by_default_blocks():
+    """High-volume new-high breakout is a valid candidate signal, but the
+    config-gated trigger is OFF by default -> swing still needs a canonical
+    fresh trigger."""
+    s = StockScreener()
+    ok, fails = s.evaluate_buy_eligibility(
+        _passing_stock(fresh_bullish_trigger=False, volume_breakout=True), "swing")
+    assert not ok
+    assert any("No fresh bullish trigger" in f for f in fails)
+
+
+def test_breakout_trigger_ignites_swing_when_enabled(monkeypatch):
+    import screener as scr
+    monkeypatch.setattr(scr, "ALLOW_BREAKOUT_TRIGGER", True)
+    s = StockScreener()
+    ok, fails = s.evaluate_buy_eligibility(
+        _passing_stock(fresh_bullish_trigger=False, volume_breakout=True), "swing")
+    assert ok, fails
+    # intraday must NOT inherit the breakout trigger (needs real intraday candles)
+    ok2, fails2 = s.evaluate_buy_eligibility(
+        _passing_stock(fresh_bullish_trigger=False, volume_breakout=True), "intraday")
+    assert not ok2
+    assert any("No fresh bullish trigger" in f for f in fails2)
+
+
+def test_breakout_trigger_requires_volume_confirmation(monkeypatch):
+    import screener as scr
+    monkeypatch.setattr(scr, "ALLOW_BREAKOUT_TRIGGER", True)
+    s = StockScreener()
+    ok, fails = s.evaluate_buy_eligibility(
+        _passing_stock(fresh_bullish_trigger=False, volume_breakout=False), "swing")
+    assert not ok
+    assert any("No fresh bullish trigger" in f for f in fails)

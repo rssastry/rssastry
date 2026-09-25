@@ -86,6 +86,18 @@ PILOT_RS_LOOKBACK_BARS = 21            # ≈ 1 trading month; calibrate in walk-
 PILOT_MIN_RS_VS_NIFTY = 1.10
 PILOT_BREAKOUT_VOLUME_RATIO = 1.50     # breakout day volume >= 150% of 20d avg
 PILOT_MIN_EPS_GROWTH = 0.15            # trailing EPS growth floor (advisory when absent)
+
+# ── High-volume "new-high" breakout as a swing trigger (optional) ─────────
+# The canonical fresh-trigger rule (fresh MACD line cross or EMA21/50
+# crossover) stays mandatory. Optionally, a strong NEW-HIGH breakout — close
+# ABOVE THE PRIOR 10-session high (yesterday's resistance), confirmed by
+# >= BREAKOUT_TRIGGER_VOL_RATIO volume — may also ignite a swing / short-term
+# entry (the COALINDIA-type setup: 2.5x volume through prior resistance but no
+# textbook crossover yet). Default OFF: validate against frozen history
+# (validate_pilot.py) before enabling, in line with the pilot-buy discipline.
+ALLOW_BREAKOUT_TRIGGER = False
+BREAKOUT_TRIGGER_VOL_RATIO = 2.0
+BREAKOUT_TRIGGER_LOOKBACK_BARS = 10
 # Median value traded over the 20 *completed* sessions before the signal bar.
 # ₹5 crore is a minimum liquidity floor, not an assessment of market impact.
 PILOT_MIN_20D_TRADED_VALUE = 5_00_00_000
