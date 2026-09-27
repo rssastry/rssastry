@@ -235,10 +235,14 @@ def check_watchlist_price_alerts(analysis: dict = None, tolerance_pct: float = 1
                 continue
             level = (p.get("alert_on_price") or {}).get("buy_alert_at")
             sym = p.get("symbol")
-            if not sym or not level:
+            try:
+                level_f = float(level)
+            except (TypeError, ValueError):
+                level_f = 0.0
+            if not sym or level_f <= 0:
                 continue
             candidates.setdefault(sym, {
-                "level": float(level),
+                "level": level_f,
                 "style": p.get("trading_style") or p.get("style", ""),
                 "rec": p.get("recommendation", ""),
             })

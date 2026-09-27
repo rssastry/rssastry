@@ -199,6 +199,32 @@ def test_quantity_buy_price_and_style_still_validated():
     assert any("style" in f for f in failures)
 
 
+def test_validate_holding_fields_never_raises_on_bad_input():
+    """Zero, None and non-numeric fields must NEVER raise (validate-only).
+
+    Regression guard for the ZeroDivisionError that buy_price=0 used to
+    trigger inside the percentage / reward-risk math.
+    """
+    invalid_inputs = [
+        {"buy_price": 0},
+        {"buy_price": None},
+        {"buy_price": "abc"},
+        {"stop_loss": "abc"},
+        {"target": "abc"},
+        {"quantity": "abc"},
+        {"quantity": None},
+        {"stop_loss": None},
+        {"target": None},
+    ]
+    for overrides in invalid_inputs:
+        kwargs = {"symbol": "TEST", "buy_price": 100, "quantity": 10,
+                  "target": 110, "stop_loss": 95, "style": "swing"}
+        kwargs.update(overrides)
+        ok, failures = validate_holding_fields(**kwargs)
+        assert not ok, f"Expected rejection for {overrides}, got ok"
+        assert failures, f"Expected failure reasons for {overrides}"
+
+
 def test_duplicate_position_prevented_and_restores():
     orig = json.dumps(load_portfolio())
     try:

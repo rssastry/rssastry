@@ -158,21 +158,51 @@ def check_portfolio_risk(symbol: str, sector: str = None, cash: float = None,
 def validate_holding_fields(symbol: str, buy_price: float, quantity: int,
                             target: float, stop_loss: float,
                             style: str = None) -> tuple[bool, list[str]]:
-    """Validate an actionable holding, including its predefined loss limit."""
+    """Validate an actionable holding, including its predefined loss limit.
+
+    Validate-only: this function NEVER raises, regardless of the caller's
+    input.  Every invalid field (bad quantity, unusable entry price, stop or
+    target ordering, stop%/target% out of band, reward/risk below the floor,
+    unknown style) is collected into `failures`.  The percentage and
+    reward/risk math divides by the entry price, so it is deliberately skipped
+    whenever ``entry <= 0`` (guards against ZeroDivisionError the caller can
+    otherwise trigger by passing buy_price=0).
+    """
     from config import (MIN_QUANTITY, MIN_STOP_LOSS_PCT, MAX_STOP_LOSS_PCT,
                         MIN_TARGET_PCT, MAX_TARGET_PCT, MIN_RISK_REWARD)
     failures = []
 
-    if quantity is None or int(quantity) < MIN_QUANTITY:
+    # Quantity — tolerate None / non-numeric so validation reports instead of
+    # raising.
+    try:
+        qty = int(quantity) if quantity is not None else 0
+    except (TypeError, ValueError):
+        qty = 0
+    if qty < MIN_QUANTITY:
         failures.append(f"quantity must be >= {MIN_QUANTITY}")
 
-    if buy_price is None or float(buy_price) <= 0:
-        failures.append("buy_price must be > 0")
-
+    # Prices — parse all three defensively; a single non-numeric value is
+    # reported once and leaves entry unusable so the math branches below are
+    # skipped.
     try:
         entry = float(buy_price)
         stop = float(stop_loss)
         target_price = float(target)
+    except (TypeError, ValueError):
+        failures.append("target and stop_loss must be valid positive prices")
+        entry, stop, target_price = 0.0, 0.0, 0.0
+
+    if entry <= 0:
+        failures.append("buy_price must be > 0")
+
+    if entry <= 0:
+        # Entry price is unusable — report the remaining ordering problems so
+        # the caller still sees every defect in one pass.
+        if stop <= 0:
+            failures.append("stop_loss must be positive and below buy_price")
+        if target_price <= 0:
+            failures.append("target must be above buy_price")
+    else:
         if stop <= 0 or stop >= entry:
             failures.append("stop_loss must be positive and below buy_price")
         else:
@@ -197,13 +227,12 @@ def validate_holding_fields(symbol: str, buy_price: float, quantity: int,
                 failures.append(
                     f"reward/risk {rr:.2f} is below the {MIN_RISK_REWARD:.1f} minimum"
                 )
-    except (TypeError, ValueError):
-        failures.append("target and stop_loss must be valid positive prices")
 
     if style is not None and style not in ("intraday", "swing", "positional"):
         failures.append(f"style must be one of intraday/swing/positional (got '{style}')")
 
     return not failures, failures
+
 
 
 def add_holding(symbol: str, buy_price: float, quantity: int,

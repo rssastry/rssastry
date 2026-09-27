@@ -978,6 +978,23 @@ with st.sidebar:
         except Exception as e:
             st.error(str(e))
 
+    if st.button("🔎  Watchlist Buy-Level Alerts"):
+        with st.spinner("Checking watchlist buy levels..."):
+            try:
+                from alerts import check_watchlist_price_alerts
+                res = check_watchlist_price_alerts()
+            except Exception as e:
+                st.error(str(e))
+                res = {}
+        if res.get("fired"):
+            st.success(f"⚠️ Buy-level hit: {', '.join(res['fired'])} — Telegram alert sent")
+        else:
+            st.info(
+                f"Checked {res.get('checked', 0)} candidates — none at buy level"
+                + (f"; {len(res.get('failed', []))} quotes unavailable"
+                   if res.get("failed") else "")
+            )
+
     if st.button("🔄  Refresh"):
         st.rerun()
 
