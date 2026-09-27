@@ -228,8 +228,12 @@ NSE_OPEN_MINUTE = 15
 NSE_CLOSE_HOUR = 15
 NSE_CLOSE_MINUTE = 30
 
-# Daily scan should run AFTER market close so daily volume is confirmed
-MORNING_SCAN_TIME = "15:45"
+# Morning scan = pre-market briefing (before the 9:15 IST open). The
+# analysis runs on the last COMPLETED daily bar (the prior close), so daily
+# volume is already confirmed and the completed-bar BUY gate stays
+# satisfied. Windows Task Scheduler / GitHub Actions use this time; a
+# post-close run (15:45) can still be added for a same-day confirmation.
+MORNING_SCAN_TIME = "08:00"
 MIDDAY_REVIEW_TIME = "12:30"
 PRECLOSE_CHECK_TIME = "15:00"
 EOD_SUMMARY_TIME = "16:00"

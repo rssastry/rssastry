@@ -3,7 +3,7 @@
 #
 # Two tasks are created for the CURRENT logged-on user (no admin required):
 #
-#   "StockAnalysis Morning Scan"          Mon-Fri  15:45 IST  post-close scan
+#   "StockAnalysis Morning Scan"          Mon-Fri  08:00 IST  pre-market scan
 #                                            (price refresh + fundamentals +
 #                                             screener + AI + Telegram alerts;
 #                                             NSE holidays skipped by the app)
@@ -20,7 +20,7 @@
 #
 # Usage (from the repo root, any shell):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1 -MorningTime 15:45 -SnapshotTime 08:30
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1 -MorningTime 08:00 -SnapshotTime 08:30
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1 -Remove
 #
 # Note: tasks run with interactive logon (they run while you are logged in),
@@ -28,7 +28,7 @@
 # (task -> Properties -> General -> "Run whether user is logged on or not"),
 # or the app can also run unattended via GitHub Actions (daily-scan.yml).
 param(
-    [string]$MorningTime  = '15:45',   # IST wall clock for the morning scan
+    [string]$MorningTime  = '08:00',   # IST wall clock for the morning scan
     [string]$SnapshotTime = '08:30',   # IST wall clock for the fundamentals job
     [switch]$Remove
 )
@@ -76,7 +76,7 @@ if ($Remove) {
 }
 
 New-ScanTask 'StockAnalysis Morning Scan' 'morning' $MorningTime `
-    'StockAnalysis: post-close market scan 15:45 IST Mon-Fri (prices + fundamentals + screener + AI + Telegram). NSE holidays skipped by the app.'
+    'StockAnalysis: pre-market scan 08:00 IST Mon-Fri (prices + fundamentals + screener + AI + Telegram). NSE holidays skipped by the app.'
 New-ScanTask 'StockAnalysis Fundamentals Capture' 'snapshot' $SnapshotTime `
     'StockAnalysis: point-in-time fundamental snapshots for the NSE universe, 08:30 IST Mon-Fri (pre-market freshness).'
 

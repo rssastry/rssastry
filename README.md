@@ -106,7 +106,7 @@ Scheduled Tasks**:
 
 | Task | Schedule (IST) | Runs |
 |------|----------------|------|
-| `StockAnalysis Morning Scan` | Mon–Fri 15:45 (post-close) | `schedular.py morning` — refresh price CSVs, capture fundamentals, screener + AI second opinion, Telegram alerts (skips NSE holidays itself) |
+| `StockAnalysis Morning Scan` | Mon–Fri 08:00 (pre-market) | `schedular.py morning` — refresh price CSVs, capture fundamentals, screener + AI second opinion, Telegram alerts (skips NSE holidays itself) |
 | `StockAnalysis Fundamentals Capture` | Mon–Fri 08:30 (pre-market) | `run.py snapshot` — point-in-time fundamental snapshots for the whole NSE universe |
 
 **Install** (from the repo root, no admin needed — tasks run for the current
@@ -171,7 +171,7 @@ source for validations and backtests:
 .venv\Scripts\python.exe update_price_files.py -s RELIANCE,TCS
 ```
 
-- The post-close scan (`schedular.job_morning_scan`) refreshes them as Step 0,
+- The pre-market scan (`schedular.job_morning_scan`) refreshes them as Step 0,
   on market days only, so each file ends at the latest completed trading session.
 - Existing rows are never re-rendered (byte-preserving merge): only genuinely
   new dates are appended, duplicates are skipped, and a mid-file gap is

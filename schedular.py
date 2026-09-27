@@ -51,15 +51,17 @@ def get_live_price(symbol: str) -> float:
 
 
 # ─────────────────────────────────────────────
-# Job 1 — Post-Close Scan (15:45 PM)
-# Runs AFTER market close so daily volume is confirmed.
+# Job 1 — Pre-Market Scan (08:00 AM)
+# Runs on the last COMPLETED daily bar (the prior close), so daily volume
+# is already confirmed and the completed-bar BUY gate is satisfied. This
+# is the morning briefing, delivered before the 9:15 IST open.
 # ─────────────────────────────────────────────
 def job_morning_scan():
     if not is_market_day():
         log("Weekend or NSE holiday — skipping scan.")
         return
 
-    log("Starting post-close scan...")
+    log("Starting pre-market scan...")
     send_telegram(
         f"<b>Market scan starting...</b>\n"
         f"{datetime.now().strftime('%d %b %Y, %H:%M IST')}"
@@ -119,11 +121,11 @@ def job_morning_scan():
 
         # Step 3: Send morning summary
         send_morning_summary(analysis)
-        log("Post-close scan complete.")
+        log("Pre-market scan complete.")
 
     except Exception as e:
-        log(f"Post-close scan failed: {e}")
-        send_telegram(f"<b>Post-close scan error:</b> {e}")
+        log(f"Pre-market scan failed: {e}")
+        send_telegram(f"<b>Pre-market scan error:</b> {e}")
 
 
 # ─────────────────────────────────────────────
@@ -258,7 +260,7 @@ def job_eod_summary():
             f"<b>Market Closed - EOD Summary</b>\n"
             f"Date: {datetime.now().strftime('%d %b %Y')}"
             f"{pnl_text}\n"
-            f"Next scan: Tomorrow 15:45 PM IST\n"
+            f"Next scan: Tomorrow 08:00 AM IST\n"
             f"Open dashboard for full details."
         )
         log("EOD summary sent.")
@@ -296,7 +298,7 @@ def run_scheduler():
     )
     log("Scheduler started.")
     log("Jobs scheduled:")
-    log(f"  {MORNING_SCAN_TIME} — Post-close scan + AI analysis + Telegram alert")
+    log(f"  {MORNING_SCAN_TIME} — Pre-market scan + AI analysis + Telegram alert")
     log(f"  {MIDDAY_REVIEW_TIME} — Portfolio hold/sell review")
     log(f"  {PRECLOSE_CHECK_TIME} — Stop loss and target checks")
     log(f"  {EOD_SUMMARY_TIME} — EOD portfolio summary")

@@ -11,7 +11,7 @@
 #
 # Jobs:
 #    morning   -> .venv\Scripts\python.exe schedular.py morning
-#                 Post-close market scan: refresh price CSVs, capture
+#                 Pre-market (08:00 IST) scan: refresh price CSVs, capture
 #                 fundamental snapshots, run the screener + AI second opinion,
 #                 send Telegram buy/summary alerts. Skips weekends and NSE
 #                 holidays internally (is_market_day).

@@ -1,6 +1,6 @@
 """update_price_files.py — Keep raw_data/prices/*.csv up to date.
 
-Every trading day the post-close scan re-validates the NSE universe, and
+Every trading day the morning scan re-validates the NSE universe, and
 that is the moment the local price files should be refreshed.  This
 module fetches the completed daily OHLCV bars (yfinance with
 ``auto_adjust=False`` so the raw series stays comparable to the existing
