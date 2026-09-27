@@ -7,7 +7,7 @@
 #                                            (price refresh + fundamentals +
 #                                             screener + AI + Telegram alerts;
 #                                             NSE holidays skipped by the app)
-#   "StockAnalysis Fundamentals Capture"  Mon-Fri  08:30 IST  point-in-time
+#   "StockAnalysis Fundamentals Capture"  Mon-Fri  07:45 IST  point-in-time
 #                                            fundamental snapshots for the
 #                                            whole NSE universe
 #
@@ -20,7 +20,7 @@
 #
 # Usage (from the repo root, any shell):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1 -MorningTime 08:00 -SnapshotTime 08:30
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1 -MorningTime 08:00 -SnapshotTime 07:45
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1 -Remove
 #
 # Note: tasks run with interactive logon (they run while you are logged in),
@@ -29,7 +29,7 @@
 # or the app can also run unattended via GitHub Actions (daily-scan.yml).
 param(
     [string]$MorningTime  = '08:00',   # IST wall clock for the morning scan
-    [string]$SnapshotTime = '08:30',   # IST wall clock for the fundamentals job
+    [string]$SnapshotTime = '07:45',   # IST wall clock for the fundamentals job
     [switch]$Remove
 )
 
@@ -78,7 +78,7 @@ if ($Remove) {
 New-ScanTask 'StockAnalysis Morning Scan' 'morning' $MorningTime `
     'StockAnalysis: pre-market scan 08:00 IST Mon-Fri (prices + fundamentals + screener + AI + Telegram). NSE holidays skipped by the app.'
 New-ScanTask 'StockAnalysis Fundamentals Capture' 'snapshot' $SnapshotTime `
-    'StockAnalysis: point-in-time fundamental snapshots for the NSE universe, 08:30 IST Mon-Fri (pre-market freshness).'
+    'StockAnalysis: point-in-time fundamental snapshots for the NSE universe, 07:45 IST Mon-Fri (before the 08:00 scan, so fresh snapshots are already on file).'
 
 Write-Host ''
 Write-Host 'Registered for current user only (runs while you are logged on).'

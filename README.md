@@ -107,7 +107,7 @@ Scheduled Tasks**:
 | Task | Schedule (IST) | Runs |
 |------|----------------|------|
 | `StockAnalysis Morning Scan` | Mon–Fri 08:00 (pre-market) | `schedular.py morning` — refresh price CSVs, capture fundamentals, screener + AI second opinion, Telegram alerts (skips NSE holidays itself) |
-| `StockAnalysis Fundamentals Capture` | Mon–Fri 08:30 (pre-market) | `run.py snapshot` — point-in-time fundamental snapshots for the whole NSE universe |
+| `StockAnalysis Fundamentals Capture` | Mon–Fri 07:45 (pre-market, before the scan) | `run.py snapshot` — point-in-time fundamental snapshots for the whole NSE universe |
 
 **Install** (from the repo root, no admin needed — tasks run for the current
 logged-on user):
