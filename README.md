@@ -98,6 +98,44 @@ cache, SQLite stores, price CSVs, snapshots, JSON reports) honors it via
 disk has been seeded. Seed the disk once by copying the current
 `data_cache/` and `raw_data/prices/` from a working copy into it.
 
+## Windows scheduled jobs (self-hosted daily scans)
+
+If you run the app on your own Windows PC (instead of / in addition to the
+GitHub Actions scan), the two daily jobs can be registered as **Windows
+Scheduled Tasks**:
+
+| Task | Schedule (IST) | Runs |
+|------|----------------|------|
+| `StockAnalysis Morning Scan` | Mon–Fri 15:45 (post-close) | `schedular.py morning` — refresh price CSVs, capture fundamentals, screener + AI second opinion, Telegram alerts (skips NSE holidays itself) |
+| `StockAnalysis Fundamentals Capture` | Mon–Fri 08:30 (pre-market) | `run.py snapshot` — point-in-time fundamental snapshots for the whole NSE universe |
+
+**Install** (from the repo root, no admin needed — tasks run for the current
+logged-on user):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1
+```
+
+Trigger times are given in IST and converted to the local machine's time zone
+automatically, so the tasks always fire at the correct IST wall clock even if
+the PC is not on India Standard Time.
+
+**Verify / other commands:**
+
+```powershell
+Get-ScheduledTask -TaskName "StockAnalysis*" | Select-Object TaskName, State
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_scan_jobs.ps1 -Remove
+```
+
+* Run a job immediately for a smoke test: `.\scripts\run_scan_job.ps1 -Job selfcheck`
+  (deps + interpreter check) or `-Job morning` / `-Job snapshot` (real runs).
+* Logs: `<repo>\logs\<job>-<yyyy-MM-dd>.log` (UTF-8, appended; `*.log` is
+  git-ignored).
+* Tasks use interactive logon (they run while you are logged in) to avoid
+  storing a password. For unattended runs use Task Scheduler → task →
+  Properties → General → **Run whether user is logged on or not**, or rely on
+  the GitHub Actions scan (`daily-scan.yml`).
+
 ## Historical data maintenance
 
 The application stores daily OHLCV data in `data_cache/` as period-specific

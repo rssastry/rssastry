@@ -151,6 +151,21 @@ def test_merge_uses_statements_when_no_live_dict(tmp_path, monkeypatch):
     assert merged["data_quality"] == "statements"
 
 
+
+
+def test_capture_snapshots_counts_and_throttles(monkeypatch):
+    """Every symbol gets one capture call plus one inter-request pause."""
+    monkeypatch.setattr(
+        snapshots, "capture_symbol_snapshot",
+        lambda sym: (True, "captured") if sym != "BAD.NS" else (False, "nope"),
+    )
+    pauses = {"n": 0}
+    monkeypatch.setattr(snapshots.time, "sleep", lambda _sec: pauses.__setitem__("n", pauses["n"] + 1))
+    res = snapshots.capture_snapshots(["A.NS", "B.NS", "BAD.NS"])
+    assert res == {"requested": 3, "captured": 2, "failed": 1}
+    assert pauses["n"] == 3
+
+
 def test_merge_as_of_respects_antilookahead(tmp_path, monkeypatch):
     _write_records(tmp_path, monkeypatch, "TEST.NS", [
         {"as_of": "2024-01-01", "symbol": "TEST", "source": "yfinance.statements",

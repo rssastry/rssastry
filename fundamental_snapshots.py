@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import time
 from datetime import date, timedelta
 
 import yfinance as yf
@@ -9,6 +10,12 @@ import yfinance as yf
 import paths
 
 SNAPSHOT_DIR = paths.dir_path(os.path.join("data_cache", "fundamental_snapshots"))
+
+# Sequential yfinance.info fetches for the whole universe (~190 symbols) trip
+# Yahoo rate limits when fired back-to-back (daily scan and the scheduled
+# fundamentals job both capture the full list). A small inter-request pause
+# keeps the run reliable without materially slowing it down.
+SNAPSHOT_FETCH_DELAY_SEC = 0.15
 
 # Yahoo Finance ticker aliases for local NSE symbols whose company was renamed
 # or de-merged on the provider after the symbol joined the universe. Records
@@ -112,6 +119,8 @@ def capture_snapshots(symbols: list[str]) -> dict:
             captured += 1
         else:
             failed += 1
+        if SNAPSHOT_FETCH_DELAY_SEC > 0:
+            time.sleep(SNAPSHOT_FETCH_DELAY_SEC)
     return {"requested": len(symbols), "captured": captured, "failed": failed}
 
 

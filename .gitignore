@@ -24,6 +24,7 @@ env/
 # ── Runtime caches & logs (regenerable) ────────────────────────
 data_cache/
 *.log
+logs/
 signals_log.csv
 
 # ── "Bible" derived artifacts (regenerable via run.py bible) ────
