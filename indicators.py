@@ -17,6 +17,9 @@ from config import (BREAKDOWN_LOOKBACK_BARS, BREAKDOWN_RESOLUTION_LOOKBACK,
                     BREAKOUT_TRIGGER_VOL_RATIO, BREAKOUT_TRIGGER_LOOKBACK_BARS)
 warnings.filterwarnings("ignore")
 
+import console
+console.force_utf8_stdio()
+
 
 def find_unresolved_breakdown(close, high, vol, index=None,
                               lookback=BREAKDOWN_LOOKBACK_BARS):

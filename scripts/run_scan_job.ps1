@@ -29,6 +29,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$Utf8Encoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $Utf8Encoding
+$env:PYTHONIOENCODING = 'utf-8'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 # Prefer the project virtualenv; fall back to any python.exe on PATH.

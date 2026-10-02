@@ -2,6 +2,9 @@
 
 import importlib, sys
 
+import console
+console.force_utf8_stdio()
+
 packages = [
     "yfinance", "pandas", "numpy", "ta",
     "streamlit", "plotly", "schedule", "apscheduler",

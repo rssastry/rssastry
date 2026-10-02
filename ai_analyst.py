@@ -17,6 +17,9 @@ warnings.filterwarnings("ignore")
 
 load_dotenv()
 
+import console
+console.force_utf8_stdio()
+
 
 class AIAnalyst:
 

@@ -22,6 +22,9 @@ from fundamental_snapshots import resolve_provider_ticker, merge_fundamental_sna
 
 warnings.filterwarnings("ignore")
 
+import console
+console.force_utf8_stdio()
+
 # ─────────────────────────────────────────────
 # NSE Stock Universe (Top 200 liquid stocks)
 # ─────────────────────────────────────────────

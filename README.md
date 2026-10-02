@@ -136,6 +136,44 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows_sc
   Properties → General → **Run whether user is logged on or not**, or rely on
   the GitHub Actions scan (`daily-scan.yml`).
 
+## Local IIS dashboard (same working data)
+
+IIS does not host Streamlit directly. It reverse-proxies requests to a local
+Streamlit process, which this repo can start at user logon. Both the existing
+dashboard and this IIS deployment use the same checkout and set `SA_DATA_DIR`
+to the repo root, so files such as `portfolio.json`, `ai_analysis.json`, and
+`screener_results.json` remain the same files; nothing is copied or migrated.
+
+1. Enable **Internet Information Services** and its **WebSocket Protocol**
+  Windows feature. Install the IIS **URL Rewrite** and **Application Request
+  Routing (ARR)** modules, then in IIS Manager open **Application Request
+  Routing Cache → Server Proxy Settings**, enable proxy, and enable **Preserve
+  host header**.
+2. Install the project dependencies if needed:
+
+  ```powershell
+  .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+  ```
+
+3. In IIS Manager, add a site whose physical path is `<repo>\iis` (the folder
+  containing `web.config`). Use an available port, such as `8080`, and an
+  application pool with **No Managed Code**. Browse to `http://localhost:8080`.
+4. Register and start the local dashboard process:
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_iis_dashboard_task.ps1
+  Start-ScheduledTask -TaskName "StockAnalysis IIS Dashboard"
+  ```
+
+  It starts at each logon and listens only on `127.0.0.1:8501`; IIS is the
+  browser-facing endpoint. Check `logs\iis-dashboard.log` if the proxy shows
+  an error. Remove the task with
+  `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_iis_dashboard_task.ps1 -Remove`.
+
+Keep this checkout in place and do not run a second copy against the same JSON
+files at the same time. The IIS dashboard and a manually launched dashboard
+share their data, but simultaneous edits or scans can still race.
+
 ## Historical data maintenance
 
 The application stores daily OHLCV data in `data_cache/` as period-specific

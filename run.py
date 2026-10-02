@@ -25,6 +25,9 @@ import subprocess
 
 import paths
 
+import console
+console.force_utf8_stdio()
+
 
 def get_python_executable():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -94,6 +97,7 @@ def main():
         subprocess.run(
             [python_exe, "-m", "streamlit", "run", "dashboard.py", "--server.headless", "true"],
             cwd=os.path.dirname(os.path.abspath(__file__)),
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
             check=False,
         )
 

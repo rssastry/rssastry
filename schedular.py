@@ -16,6 +16,9 @@ import paths
 import warnings
 warnings.filterwarnings("ignore")
 
+import console
+console.force_utf8_stdio()
+
 
 def is_market_day() -> bool:
     """Skip weekends AND NSE holidays."""

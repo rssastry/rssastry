@@ -16,6 +16,9 @@ import paths
 from decision_quality import build_decision_summary
 warnings.filterwarnings("ignore")
 
+import console
+console.force_utf8_stdio()
+
 st.set_page_config(
     page_title="AI Stock Analyst",
     page_icon="📈",
