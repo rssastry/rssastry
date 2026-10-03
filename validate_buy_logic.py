@@ -52,7 +52,8 @@ import strategies
 warnings.filterwarnings("ignore")
 
 SLIPPAGE = 0.0005
-TXN_COST = 0.001
+# Base 0.1% transaction cost + STT (delivery) so validation reflects real costs.
+TXN_COST = 0.001 + config.STT_RATE
 ENTRY_SLOT_PCT = 0.20          # fractional slot per trade for equity sim
 MAX_HOLD_BARS = {"intraday": 3, "swing": 15, "positional": 60}
 MIN_CONFIDENT_TRADES = 30

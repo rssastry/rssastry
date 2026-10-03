@@ -1,6 +1,6 @@
 # StockAnalysis - Rules of Engagement (the Playbook)
 
-_Auto-generated from `config.py` at 2026-09-12T12:34:27+00:00. Never edit by hand - edit the code, regenerate._
+_Auto-generated from `config.py` at 2026-10-03T09:35:08+00:00. Never edit by hand - edit the code, regenerate._
 
 > This is the app's contract with you: what it believes, why, and > how it measures whether it is right. Review it whenever you are > about to override a recommendation.
 

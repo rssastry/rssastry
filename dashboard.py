@@ -449,9 +449,12 @@ a { color: var(--blue); }
 # ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
 def load_json(path):
     # Resolve against the durable state dir (SA_DATA_DIR, if configured) so
     # the dashboard reads the SAME files the scanner writes on a persistent mount.
+    # ttl=300 keeps widget interactions from re-reading + re-parsing these every
+    # rerun; the sidebar "⟳ Refresh Data" button clears the cache explicitly.
     if not os.path.exists(paths.path(path)) and path == "ai_analysis.json":
         path = "ai_analysis_progress.json"
     path = paths.path(path)
@@ -469,6 +472,7 @@ def load_json(path):
 
 
 
+@st.cache_data(ttl=600, show_spinner=False)
 def nifty_sparkline_svg(width=260, height=60):
     """Inline-SVG NIFTY sparkline from local price data (no network)."""
     try:
@@ -513,6 +517,7 @@ def nifty_sparkline_svg(width=260, height=60):
         )
 
 
+@st.cache_data(ttl=180, show_spinner=False)
 def get_live_price(symbol):
     try:
         from fundamental_snapshots import resolve_provider_ticker
@@ -938,6 +943,12 @@ with st.sidebar:
                 st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
+
+    if st.button("⟳  Refresh Data"):
+        # Clear the load_json / get_live_price / sparkline caches so the next
+        # rerun re-reads the freshly committed scan outputs from disk.
+        st.cache_data.clear()
+        st.rerun()
 
     if st.button("🗃️  Capture Fundamental Snapshots"):
         with st.status("Capturing current fundamentals for the NSE universe...", expanded=True) as status:
@@ -1702,10 +1713,13 @@ elif "Portfolio" in page:
             st.markdown('<div class="section-header" style="margin-top:20px">Close Position</div>', unsafe_allow_html=True)
             close_sym   = st.selectbox("Stock", [h["symbol"] for h in holdings])
             close_price = st.number_input("Sell Price (₹)", min_value=1.0, step=0.5)
+            close_reason = st.selectbox("Exit reason",
+                                        ["MANUAL", "STOP", "TARGET", "TIME", "RULE"],
+                                        help="Why is this position closing? Tagged on the trade for attribution.")
             if st.button("🔴  Close Position"):
                 from portfolio import remove_holding
-                remove_holding(close_sym, close_price)
-                st.success(f"Closed {close_sym}")
+                remove_holding(close_sym, close_price, exit_reason=close_reason)
+                st.success(f"Closed {close_sym} [{close_reason}]")
                 st.rerun()
 
     with col_table:
@@ -1786,9 +1800,63 @@ elif "Portfolio" in page:
                 st.markdown('<div class="section-header">Closed Trades</div>', unsafe_allow_html=True)
                 closed_rows = [{"Symbol": t["symbol"], "Buy ₹": t["buy_price"],
                                 "Sell ₹": t["sell_price"], "P&L ₹": t.get("pnl",0),
-                                "P&L %": t.get("pnl_pct",0), "Date": t.get("sell_date","")}
+                                "P&L %": t.get("pnl_pct",0),
+                                "Exit": t.get("exit_reason") or "MANUAL",
+                                "Date": t.get("sell_date","")}
                                for t in closed]
                 st.dataframe(pd.DataFrame(closed_rows), width="stretch", hide_index=True)
+
+            # Edge vs market — the attribution report card (from discipline.py)
+            try:
+                with open(paths.path("portfolio_discipline_report.json"), encoding="utf-8") as fh:
+                    _disc = json.load(fh)
+            except Exception:
+                _disc = None
+            if _disc:
+                _summary = _disc.get("summary", {})
+                st.markdown('<div class="section-header">Edge vs Market</div>', unsafe_allow_html=True)
+                e1, e2, e3, e4 = st.columns(4)
+                e1.metric("Closed trades", _summary.get("closed_trades", 0))
+                e2.metric("Alpha win rate", f"{_summary.get('closed_alpha_win_pct', 0)}%",
+                          help="% of closed trades that beat NIFTY over the same held window")
+                e3.metric("Net realized P&L", f"{_summary.get('net_realized_pnl_pct', 0):+.2f}%")
+                e4.metric("Overdue positions", _summary.get("overdue_positions", 0))
+                _ledger = _disc.get("realized_ledger", [])
+                if _ledger:
+                    led_df = pd.DataFrame(
+                        [{"Symbol": r["symbol"], "Realized%": r["realized_pnl_pct"],
+                          "NIFTY%": r["nifty_buyhold_pct"] or "-",
+                          "Alpha%": r["alpha_pct"] if r["alpha_pct"] is not None else "-"}
+                         for r in _ledger])
+                    st.dataframe(led_df, width="stretch", hide_index=True)
+                st.caption("Refresh: `python run.py discipline` (or the 15:00 scheduled job).")
+
+            # Open-position monitor: live price vs stored stop/target plan
+            st.markdown('<div class="section-header">Position Monitor</div>', unsafe_allow_html=True)
+            try:
+                from alerts import position_monitor_status
+                _mon = position_monitor_status(quote_fn=lambda s: get_live_price(s) or 0.0)
+                if not _mon:
+                    st.caption("No open positions to monitor.")
+                else:
+                    _mon_df = pd.DataFrame([{
+                        "Symbol": r["symbol"], "Style": r["style"].capitalize(),
+                        "Qty": r["quantity"], "Buy ₹": r["buy_price"],
+                        "Live ₹": r["live_price"] if r["live_price"] else "-",
+                        "P&L %": (f"{r['pnl_pct']:+.2f}" if r["pnl_pct"] is not None else "-"),
+                        "Stop ₹": r["stop_loss"] or "-",
+                        "To stop %": (f"{r['dist_to_stop_pct']:.1f}"
+                                      if r["dist_to_stop_pct"] is not None else "-"),
+                        "Target ₹": r["target"] or "-",
+                        "To target %": (f"{r['dist_to_target_pct']:.1f}"
+                                        if r["dist_to_target_pct"] is not None else "-"),
+                        "Status": r["status"],
+                    } for r in _mon])
+                    st.dataframe(_mon_df, width="stretch", hide_index=True)
+                    st.caption("Stop/target hits fire once per level via Telegram "
+                               "(`python run.py monitor` and the 12:30 / 15:00 checks).")
+            except Exception as _e:
+                st.caption(f"Position monitor unavailable: {_e}")
 
 
 # ─────────────────────────────────────────────

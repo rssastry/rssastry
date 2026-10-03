@@ -294,6 +294,124 @@ def send_portfolio_alert(result: dict):
               f"{result.get('symbol')} {result.get('action')}")
 
 
+# ─────────────────────────────────────────────
+# Open-position stop / target monitoring
+# ─────────────────────────────────────────────
+def _position_monitor_state_file() -> str:
+    from config import CACHE_DIR
+    return os.path.join(CACHE_DIR, "position_alerts_fired.json")
+
+
+def _load_portfolio_dict() -> dict:
+    import paths
+    try:
+        with open(paths.path("portfolio.json"), encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def position_monitor_status(portfolio: dict = None, quote_fn=None) -> list:
+    """Per-holding live status against the stored stop/target plan. No alerts.
+
+    Each row: symbol, style, quantity, buy_price, stop_loss, target, live_price,
+    pnl_pct, dist_to_stop_pct, dist_to_target_pct, status, trigger_level.
+    status is STOP_HIT / TARGET_HIT / OK / NO_QUOTE.
+    """
+    quote_fn = quote_fn or get_live_price_now
+    portfolio = portfolio if portfolio is not None else _load_portfolio_dict()
+    rows = []
+    for h in portfolio.get("holdings", []):
+        symbol = str(h.get("symbol", "")).upper().replace(".NS", "")
+        try:
+            buy_price = float(h.get("buy_price", 0) or 0)
+            qty = int(h.get("quantity", 0) or 0)
+            stop = float(h.get("stop_loss", 0) or 0)
+            target = float(h.get("target", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        style = str(h.get("style") or "positional").lower()
+        live = quote_fn(symbol)
+        row = {
+            "symbol": symbol, "style": style, "quantity": qty,
+            "buy_price": buy_price, "stop_loss": stop, "target": target,
+            "live_price": live,
+        }
+        if live <= 0:
+            row.update({"status": "NO_QUOTE", "pnl_pct": None,
+                        "dist_to_stop_pct": None, "dist_to_target_pct": None,
+                        "trigger_level": None})
+        else:
+            pnl_pct = (live / buy_price - 1) * 100 if buy_price else 0.0
+            row["pnl_pct"] = round(pnl_pct, 2)
+            row["dist_to_stop_pct"] = (
+                round((live - stop) / live * 100, 2) if stop and stop > 0 else None)
+            row["dist_to_target_pct"] = (
+                round((target - live) / live * 100, 2) if target and target > 0 else None)
+            if stop and stop > 0 and live <= stop:
+                row["status"], row["trigger_level"] = "STOP_HIT", stop
+            elif target and target > 0 and live >= target:
+                row["status"], row["trigger_level"] = "TARGET_HIT", target
+            else:
+                row["status"], row["trigger_level"] = "OK", None
+        rows.append(row)
+    return rows
+
+
+def check_position_alerts(portfolio: dict = None, quote_fn=None) -> dict:
+    """Fire ONE-TIME Telegram alerts when an open holding trades at its stored
+    stop-loss or target.
+
+    State persists under CACHE_DIR so each level fires only once until the
+    level changes (mirrors the watchlist-buy-level alert pattern). Call this
+    from the 12:30 / 15:00 scheduled checks, the morning scan, or
+    `python run.py monitor`.
+
+    Returns {"fired": [...], "checked": n, "failed": [symbols]}.
+    """
+    rows = position_monitor_status(portfolio=portfolio, quote_fn=quote_fn)
+    state_file = _position_monitor_state_file()
+    fired_state = {}
+    if os.path.exists(state_file):
+        try:
+            with open(state_file) as fh:
+                fired_state = json.load(fh)
+        except Exception:
+            fired_state = {}
+
+    fired, failed = [], []
+    for r in rows:
+        if r["status"] in ("STOP_HIT", "TARGET_HIT"):
+            level = r.get("trigger_level")
+            key = f"{r['symbol']}:{r['status'].lower()}:{level}"
+            if not fired_state.get(key):
+                label = "STOP-LOSS" if r["status"] == "STOP_HIT" else "TARGET"
+                send_telegram(
+                    f"<b>{r['symbol']} {label} HIT</b>\n"
+                    f"Entry Rs.{r['buy_price']} x {r['quantity']} "
+                    f"[{r['style']}]\n"
+                    f"Live Rs.{r['live_price']} "
+                    f"(P&L {r['pnl_pct']:+.2f}% from entry)\n"
+                    f"{label} level Rs.{level:g}\n"
+                    f"Time: {datetime.now().strftime('%H:%M IST')}"
+                )
+                fired_state[key] = datetime.now().isoformat(timespec="seconds")
+                fired.append(f"{r['symbol']}:{r['status']}")
+        elif r["status"] == "NO_QUOTE":
+            failed.append(r["symbol"])
+
+    try:
+        parent = os.path.dirname(state_file)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(state_file, "w") as fh:
+            json.dump(fired_state, fh, indent=2, sort_keys=True)
+    except Exception:
+        pass
+
+    return {"fired": fired, "checked": len(rows), "failed": failed}
+
+
 def send_morning_summary(all_analysis: dict):
     msg = format_morning_summary(all_analysis)
     ok  = send_telegram(msg)

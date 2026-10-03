@@ -17,7 +17,8 @@ from typing import Any
 from dotenv import load_dotenv
 
 from brokers.base import Broker
-from config import BROKER, PAPER_INITIAL_CASH
+from config import (BROKER, PAPER_INITIAL_CASH, PAPER_REALISTIC_COSTS,
+                    STT_RATE, SLIPPAGE_RATE)
 
 
 def get_broker(name: str | None = None,
@@ -35,6 +36,11 @@ def get_broker(name: str | None = None,
         from paper_broker import PaperBroker
         cash = (initial_cash if initial_cash is not None
                 else float(os.getenv("PAPER_INITIAL_CASH", PAPER_INITIAL_CASH)))
+        # Honest paper P&L: model slippage + STT from config (default on). Callers
+        # can still pass explicit kwargs to override for pure price-level tests.
+        if PAPER_REALISTIC_COSTS:
+            kwargs.setdefault("slippage", SLIPPAGE_RATE)
+            kwargs.setdefault("stt_rate", STT_RATE)
         return PaperBroker(cash, **kwargs)
 
     if resolved in ("zerodha", "kite", "kiteconnect"):

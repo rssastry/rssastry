@@ -15,7 +15,7 @@ import pandas as pd
 import yfinance as yf
 from ta.trend import EMAIndicator, MACD
 from price_store import load_adjusted
-from config import RISK_PER_TRADE, FIXED_TXN_FEE
+from config import RISK_PER_TRADE, FIXED_TXN_FEE, STT_RATE
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 from screener import NSE_STOCKS
@@ -61,6 +61,9 @@ def run_portfolio_backtest(universe=None, start='2018-01-01', end=None,
                            txn_cost=0.001, slippage=0.0005,
                            short=15, long=50, vol_thresh=1.5, atr_mult=3,
                            risk_per_trade=RISK_PER_TRADE, fixed_txn_fee=FIXED_TXN_FEE):
+    # Callers who pass txn_cost=None get the realistic STT-inclusive default.
+    if txn_cost is None:
+        txn_cost = 0.001 + STT_RATE
     if universe is None:
         universe = NSE_STOCKS
     if end is None:

@@ -48,10 +48,22 @@ _sector_cache = {}
 
 
 def get_sector(symbol: str) -> str:
-    """Fetch sector for a symbol with caching to avoid repeated API calls."""
+    """Fetch sector for a symbol with caching to avoid repeated API calls.
+
+    Prefers the local point-in-time fundamental snapshots (free, reproducible)
+    and only falls back to the yfinance network lookup when unavailable.
+    """
     sym = symbol.upper().replace(".NS", "")
     if sym in _sector_cache:
         return _sector_cache[sym]
+    try:
+        from market_breadth import _sector_for
+        sector = _sector_for(sym) or ""
+        if sector:
+            _sector_cache[sym] = sector
+            return sector
+    except Exception:
+        pass
     try:
         import yfinance as yf
         from fundamental_snapshots import resolve_provider_ticker
@@ -65,20 +77,27 @@ def get_sector(symbol: str) -> str:
 
 
 def get_correlation(sym1: str, sym2: str) -> float:
-    """Compute 60-day daily-return correlation between two symbols."""
+    """Compute 60-day daily-return correlation between two symbols.
+
+    Uses the frozen local daily CSVs (no network, no throttling). Falls back
+    to 0.0 when either symbol has no local history.
+    """
     try:
-        from data_cache import fetch_history
-        df1 = fetch_history(sym1 + ".NS", period="6mo", interval='1d')
-        df2 = fetch_history(sym2 + ".NS", period="6mo", interval='1d')
+        from price_store import load_adjusted
+        import numpy as np
+        df1 = load_adjusted(sym1.upper().replace(".NS", ""), period=None, interval="1d")
+        df2 = load_adjusted(sym2.upper().replace(".NS", ""), period=None, interval="1d")
         if df1 is None or df2 is None or df1.empty or df2.empty:
             return 0.0
-        r1 = df1["Close"].pct_change().dropna()
-        r2 = df2["Close"].pct_change().dropna()
-        # Align on common dates
+        r1 = df1["Close"].astype(float).pct_change().dropna()
+        r2 = df2["Close"].astype(float).pct_change().dropna()
+        # Align on common dates, last 60 common bars each
         common = r1.index.intersection(r2.index)
         if len(common) < 20:
             return 0.0
-        return float(r1.loc[common].corr(r2.loc[common]))
+        r1 = r1.loc[common].tail(60)
+        r2 = r2.loc[common].loc[r1.index]
+        return float(r1.corr(r2))
     except Exception:
         return 0.0
 
@@ -233,6 +252,119 @@ def validate_holding_fields(symbol: str, buy_price: float, quantity: int,
 
     return not failures, failures
 
+# ── Legacy-holding reconciliation ───────────────────────────────
+# Holdings created before the hardened validators can carry impossible plans
+# (HINDCOPPER was stored with target 540 < buy 545.64; KOTAKBANK had a stop
+# 172 vs a 395.55 entry). These helpers rebuild a compliant plan from the
+# frozen local price data and re-validate every open holding on demand.
+def _local_atr(symbol: str, period: int = 14):
+    """Wilder-style ATR from the frozen local daily CSV. None when unavailable."""
+    try:
+        from price_store import load_adjusted
+        import numpy as np
+        df = load_adjusted(symbol, period=None, interval="1d")
+        if df is None or df.empty or len(df) < period + 1:
+            return None
+        high = df["High"].astype(float)
+        low = df["Low"].astype(float)
+        close = df["Close"].astype(float)
+        prev_close = close.shift(1)
+        tr = np.maximum(high - low,
+                        np.maximum((high - prev_close).abs(),
+                                   (low - prev_close).abs()))
+        # Wilder RMA approximates a 14-period ewm with alpha=1/n
+        atr = tr.ewm(alpha=1.0 / period, adjust=False).mean().iloc[-1]
+        return round(float(atr), 2)
+    except Exception:
+        return None
+
+
+def recommended_levels(symbol: str, buy_price: float, style: str) -> dict:
+    """ATR-based target/stop for a holding, consistent with config conventions.
+
+    Uses the local price CSV's ATR and config ATR_MULT/TARGET_ATR_MULT, with
+    the same style max-stop caps as the live order builder. Returns
+    {"target", "stop_loss", "atr"} and degrades to percentage fallbacks when no
+    local history exists.
+    """
+    from config import (ATR_MULT, TARGET_ATR_MULT,
+                        MAX_STOP_DISTANCE_PCT_BY_STYLE, MIN_TARGET_PCT)
+    style = (style or "swing").lower()
+    if style not in ATR_MULT:
+        style = "swing"
+    buy_price = float(buy_price or 0)
+    atr = _local_atr(str(symbol).upper().replace(".NS", ""))
+    max_stop_pct = MAX_STOP_DISTANCE_PCT_BY_STYLE.get(style, 6.0)
+    if atr is None or buy_price <= 0:
+        # No local data: deterministic percentage plan
+        stop_pct = min(max_stop_pct, 6.0)
+        return {
+            "target": round(buy_price * 1.10, 2) if buy_price > 0 else 0.0,
+            "stop_loss": round(buy_price * (1 - stop_pct / 100.0), 2) if buy_price > 0 else 0.0,
+            "atr": None,
+        }
+    stop_dist = atr * ATR_MULT.get(style, 2.5)
+    stop_dist = min(stop_dist, buy_price * max_stop_pct / 100.0)
+    stop = round(buy_price - stop_dist, 2)
+    target = round(buy_price + atr * TARGET_ATR_MULT.get(style, 5.0), 2)
+    min_target = buy_price * (1 + MIN_TARGET_PCT / 100.0)
+    if target < min_target:
+        target = round(min_target, 2)
+    return {"target": target, "stop_loss": max(stop, 0.0), "atr": atr}
+
+
+def validate_portfolio(portfolio: dict = None, fix: bool = False) -> dict:
+    """Re-validate every open holding against the current field validators.
+
+    ``fix=True`` first rebuilds a compliant target/stop from local ATR wherever
+    the stored plan is invalid (e.g. target below entry), then saves. Returns
+    {"checked", "valid", "issues", "fixed"} where issues are the residual
+    unfixable records and fixed lists the corrections applied.
+    """
+    portfolio = portfolio if portfolio is not None else load_portfolio()
+    holdings = portfolio.get("holdings", [])
+    valid, issues, fixed = 0, [], []
+    changed = False
+    for i, h in enumerate(list(holdings)):
+        symbol = str(h.get("symbol", "")).upper().replace(".NS", "")
+        style = str(h.get("style") or "positional").lower()
+        try:
+            bp = float(h.get("buy_price", 0) or 0)
+            qty = int(h.get("quantity", 0) or 0)
+            tgt = float(h.get("target", 0) or 0)
+            sl = float(h.get("stop_loss", 0) or 0)
+        except (TypeError, ValueError):
+            issues.append({"symbol": symbol, "failures": ["non-numeric position fields"]})
+            continue
+        ok, failures = validate_holding_fields(symbol, bp, qty, tgt, sl, style)
+        if ok:
+            valid += 1
+            continue
+        issue = {
+            "symbol": symbol, "buy_price": bp, "quantity": qty,
+            "target": tgt, "stop_loss": sl, "style": style,
+            "failures": failures,
+        }
+        if fix:
+            plan = recommended_levels(symbol, bp, style)
+            ok2, fails2 = validate_holding_fields(
+                symbol, bp, qty, plan["target"], plan["stop_loss"], style)
+            if ok2:
+                h["target"] = plan["target"]
+                h["stop_loss"] = plan["stop_loss"]
+                h.setdefault("investment", round(bp * qty, 2))
+                portfolio["holdings"][i] = h
+                changed = True
+                fixed.append({**issue, "new_target": plan["target"],
+                              "new_stop": plan["stop_loss"], "atr": plan["atr"]})
+                continue
+            issue["fix_failed"] = fails2
+        issues.append(issue)
+    if fix and changed:
+        save_portfolio(portfolio)
+    return {"checked": len(holdings), "valid": valid,
+            "issues": issues, "fixed": fixed}
+
 
 
 def add_holding(symbol: str, buy_price: float, quantity: int,
@@ -329,7 +461,15 @@ def add_holding(symbol: str, buy_price: float, quantity: int,
     return True
 
 
-def remove_holding(symbol: str, sell_price: float, quantity: int = None):
+def remove_holding(symbol: str, sell_price: float, quantity: int = None,
+                   exit_reason: str = "MANUAL"):
+    """Close (full or partial) a holding and record the exit in closed_trades.
+
+    ``exit_reason`` tags the closed trade with WHAT ended the position so the
+    discipline report can answer "stop / target / manual / time" attribution:
+    one of MANUAL, STOP, TARGET, TIME, RULE (defaults to MANUAL).
+    """
+    exit_reason = str(exit_reason or "MANUAL").upper()
     portfolio = load_portfolio()
     symbol    = symbol.upper().replace(".NS", "")
     for i, h in enumerate(portfolio["holdings"]):
@@ -350,6 +490,7 @@ def remove_holding(symbol: str, sell_price: float, quantity: int = None):
                     **h,
                     "sell_price": sell_price,
                     "sell_date":  str(date.today()),
+                    "exit_reason": exit_reason,
                     "pnl":        round(pnl, 2),
                     "pnl_pct":    round(pnl_pct, 2),
                     "closed_qty": sell_qty
@@ -359,7 +500,7 @@ def remove_holding(symbol: str, sell_price: float, quantity: int = None):
                 save_portfolio(portfolio)
                 result = "PROFIT" if pnl > 0 else "LOSS"
                 print(f"  Closed {symbol} [{result}]: "
-                      f"P&L Rs.{pnl:+,.2f} ({pnl_pct:+.2f}%)")
+                      f"P&L Rs.{pnl:+,.2f} ({pnl_pct:+.2f}%) [{exit_reason}]")
                 return
 
             # Partial close: reduce holding quantity and record realized part in closed_trades
@@ -370,6 +511,7 @@ def remove_holding(symbol: str, sell_price: float, quantity: int = None):
                 **{k: v for k, v in h.items() if k != 'quantity'},
                 "sell_price": sell_price,
                 "sell_date":  str(date.today()),
+                "exit_reason": exit_reason,
                 "pnl":        round(pnl, 2),
                 "pnl_pct":    round(pnl_pct, 2),
                 "closed_qty": sell_qty

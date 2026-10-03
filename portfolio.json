@@ -5,8 +5,8 @@
       "buy_price": 545.64,
       "quantity": 43,
       "buy_date": "2026-08-27",
-      "target": 540.0,
-      "stop_loss": 520.5,
+      "target": 623.29,
+      "stop_loss": 518.36,
       "style": "swing",
       "investment": 23462.52,
       "added_at": "2026-08-29 10:33:00"
@@ -18,8 +18,8 @@
       "buy_price": 395.55,
       "quantity": 58,
       "buy_date": "2026-06-12",
-      "target": 395.0,
-      "stop_loss": 172.0,
+      "target": 435.11,
+      "stop_loss": 371.82,
       "style": "positional",
       "investment": 22941.9,
       "added_at": "2026-06-12 09:51:40",
@@ -124,5 +124,5 @@
       "closed_qty": 15
     }
   ],
-  "last_updated": "2026-09-27 15:18:57"
+  "last_updated": "2026-10-03 14:19:38"
 }

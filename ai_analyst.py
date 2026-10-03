@@ -457,6 +457,18 @@ Reply ONLY with valid JSON:
         all_analysis = {}
 
         for style, stocks in screener_results.items():
+            # A style that can never BUY on daily bars (intraday) needs no LLM
+            # second opinion — the deterministic screener output is the whole
+            # story and every LLM call there is pure token spend. Skip it.
+            from config import (AI_SKIP_POLICY_DISABLED_STYLES,
+                                ALLOW_DAILY_BAR_INTRADAY_BUY)
+            if (AI_SKIP_POLICY_DISABLED_STYLES and style == "intraday"
+                    and not ALLOW_DAILY_BAR_INTRADAY_BUY):
+                print(f"\n  Skipping {style} AI analysis (policy-disabled for "
+                      f"BUY on daily bars — deterministic WATCHLIST only).")
+                all_analysis[style] = []
+                continue
+
             print(f"\n  Analyzing {len(stocks)} {style} picks with AI "
                   f"({self.engine_name})...")
             style_results = []

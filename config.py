@@ -200,6 +200,12 @@ REQUIRE_COMPLETED_DAILY_BAR_FOR_BUY = True
 # downgraded to WATCHLIST with the reason recorded.
 AI_BUY_MIN_CONFIDENCE = 55
 
+# The intraday style can NEVER produce a BUY on daily bars
+# (ALLOW_DAILY_BAR_INTRADAY_BUY = False), so running the LLM second opinion on
+# those picks is pure token spend. True = skip AI analysis entirely for
+# policy-disabled styles (they stay deterministic WATCHLIST in the screener).
+AI_SKIP_POLICY_DISABLED_STYLES = True
+
 # Maximum distance (in % of price) from entry to the ATR stop. One bad day or
 # gap must never exceed this. Prevents the ~10% swing stops that turned a
 # single crash day into an oversized loss. Style copy of ATR_MULT.
@@ -261,6 +267,16 @@ NSE_HOLIDAYS_2026 = {
 # adapter (requires kiteconnect + KITE_API_KEY/KITE_ACCESS_TOKEN in .env).
 BROKER = "paper"
 PAPER_INITIAL_CASH = 100000.0
+
+# Real-world India equity costs on paper fills. STT 0.025% (delivery) is the
+# big line item; the 5 bps slippage models filling away from the quote on
+# low-liquidity moments. With exchange charges + GST on top of the base 0.1%
+# transaction cost, a delivery round trip is ~0.13-0.15%. The paper broker
+# applies these when PAPER_REALISTIC_COSTS is on; backtest/validation scripts
+# blend STT into their per-trade cost constant.
+STT_RATE = 0.00025            # Securities Transaction Tax (delivery, each side)
+SLIPPAGE_RATE = 0.0005        # 5 bps adverse-fill assumption
+PAPER_REALISTIC_COSTS = True  # apply STT + slippage in the paper broker
 
 # ── Risk circuit breaker (automation kill-switch) ──────────────
 # Consulted before every automated order (see circuit_breaker.py). When a

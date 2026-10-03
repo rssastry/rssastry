@@ -8,6 +8,8 @@ Usage:
   python run.py full         — screen + analyze + alerts (full morning run)
   python run.py pricefiles   — refresh raw_data/prices CSVs from provider
   python run.py snapshot     — capture point-in-time fundamental snapshots
+  python run.py monitor      — check open positions vs stop/target, send alerts
+  python run.py reconcile    — re-validate holdings, fix impossible plan levels
   python run.py dashboard    — launch Streamlit dashboard
   python run.py scheduler    — start the daily auto-scheduler
   python run.py bible        — close the loop: journal import+resolve+report,
@@ -131,6 +133,35 @@ def main():
         from alerts import send_telegram
         ok = send_telegram("✅ AI Stock Analyst is connected and working!")
         print("Telegram:", "✅ OK" if ok else "❌ Failed")
+
+    elif cmd == "monitor":
+        from alerts import position_monitor_status, check_position_alerts
+        rows = position_monitor_status()
+        if not rows:
+            print("  No open positions to monitor.")
+        for r in rows:
+            print(f"  {r['symbol']:<14} {r['style']:<10} "
+                  f"buy Rs.{r['buy_price']:>8.2f} live Rs.{r['live_price'] or 0:>8.2f} "
+                  f"{r['status']}")
+        res = check_position_alerts()
+        print(f"\n  Position alerts: fired={len(res['fired'])} "
+              f"checked={res['checked']} no_quote={len(res['failed'])}")
+        if res["fired"]:
+            print("  Fired:", ", ".join(res["fired"]))
+
+    elif cmd == "reconcile":
+        from portfolio import validate_portfolio
+        report = validate_portfolio(fix=True)
+        print(f"\n  Holdings checked: {report['checked']} | "
+              f"already valid: {report['valid']} | "
+              f"fixed: {len(report['fixed'])} | "
+              f"unfixable issues: {len(report['issues'])}")
+        for f in report["fixed"]:
+            print(f"  Fixed {f['symbol']}: target Rs.{f['target']} -> "
+                  f"Rs.{f['new_target']}, stop Rs.{f['stop_loss']} -> "
+                  f"Rs.{f['new_stop']} (atr {f['atr']})")
+        for issue in report["issues"]:
+            print(f"  Issue   {issue['symbol']}: {issue['failures']}")
 
     elif cmd in ("journal", "market", "discipline", "playbook", "bible"):
         _run_bible_command(cmd)

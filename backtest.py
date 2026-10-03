@@ -17,6 +17,7 @@ from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
 from ta.volatility import AverageTrueRange
 from screener import NSE_STOCKS
+from config import STT_RATE
 
 
 def compute_indicators(df):
@@ -45,6 +46,9 @@ def compute_indicators(df):
 
 
 def backtest_symbol(symbol, start='2016-01-01', end=None, txn_cost=0.001, slippage=0.0005):
+    # Defaults model base txn cost + STT when the caller uses them (see config.STT_RATE).
+    from config import STT_RATE
+    txn_cost = float(txn_cost if txn_cost is not None else 0.001 + STT_RATE)
     from price_store import load_adjusted
     df = load_adjusted(symbol, start=start, end=end)
     if df is None or len(df) < 300:

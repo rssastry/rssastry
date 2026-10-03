@@ -147,6 +147,15 @@ def job_midday_review():
                r.get("urgency") == "Immediate":
                 send_portfolio_alert(r)
 
+        # Open-position stop/target monitoring (once-per-level, deduped)
+        try:
+            from alerts import check_position_alerts
+            _res = check_position_alerts()
+            if _res.get("fired"):
+                log(f"Position stop/target alerts fired: {', '.join(_res['fired'])}")
+        except Exception as exc:
+            log(f"Position alert check skipped: {exc}")
+
         log(f"Midday review done. {len(results)} holdings checked.")
 
     except Exception as e:
@@ -177,44 +186,18 @@ def job_preclose_check():
             log("No portfolio file found.")
             return
 
-        with open(_portfolio_file) as f:
-            portfolio = json.load(f)
-
-        from indicators import IndicatorEngine
-
-        for h in portfolio.get("holdings", []):
-            symbol = h["symbol"]
-
-            # Use live intraday price for stop-loss/target alerts
-            cmp = get_live_price(symbol)
-            if cmp <= 0:
-                # Fallback to daily-bar close if live quote unavailable
-                engine = IndicatorEngine(symbol + ".NS")
-                if not engine.fetch():
-                    continue
-                ind = engine.compute_all()
-                cmp = ind.get("current_price", 0)
-
-            sl  = h.get("stop_loss", 0)
-            tgt = h.get("target", 0)
-
-            if cmp > 0 and cmp <= sl:
-                send_telegram(
-                    f"<b>STOP LOSS HIT - {symbol}</b>\n"
-                    f"CMP Rs.{cmp} has hit SL Rs.{sl}\n"
-                    f"Consider exiting immediately!\n"
-                    f"Time: {datetime.now().strftime('%H:%M IST')}"
-                )
-                log(f"SL alert sent for {symbol}")
-
-            elif cmp > 0 and cmp >= tgt:
-                send_telegram(
-                    f"<b>TARGET HIT - {symbol}</b>\n"
-                    f"CMP Rs.{cmp} has reached Target Rs.{tgt}\n"
-                    f"Consider booking profits!\n"
-                    f"Time: {datetime.now().strftime('%H:%M IST')}"
-                )
-                log(f"Target alert sent for {symbol}")
+        # Open-position stop/target monitoring: fires ONCE per level (state
+        # persisted under data_cache/position_alerts_fired.json), so the 12:30
+        # and 15:00 checks never spam the same hit on consecutive days.
+        try:
+            from alerts import check_position_alerts
+            _res = check_position_alerts()
+            if _res.get("fired"):
+                log(f"Position stop/target alerts fired: {', '.join(_res['fired'])}")
+            if _res.get("failed"):
+                log(f"Position monitor no-quote: {', '.join(_res['failed'])}")
+        except Exception as exc:
+            log(f"Position alert check skipped: {exc}")
 
         log("Pre-close check done.")
 

@@ -1,7 +1,11 @@
 name: Daily Market Scan
 
-# Runs the post-close morning scan every weekday (15:45 IST = 10:15 UTC) on
-# GitHub's free runners, then commits the fresh results back to `main`.
+# Two scheduled runs every weekday on GitHub's free runners, both committing
+# the fresh results back to `main`:
+#   1. 08:00 IST pre-market briefing (02:30 UTC) — the morning scan the
+#      bundled scheduler would do locally, delivered before the 9:15 open.
+#   2. 15:45 IST post-close confirmation (10:15 UTC) — same-day completed
+#      bar, so the dashboard always shows the latest close at market end.
 #
 # Why this exists: Render's free tier has an EPHEMERAL filesystem and only
 # runs `streamlit run dashboard.py` — it never starts the bundled scheduler
@@ -14,7 +18,8 @@ name: Daily Market Scan
 
 on:
   schedule:
-    - cron: "10 15 * * 1-5"   # 15:45 IST, Mon–Fri (IST = UTC+5:30)
+    - cron: "30 2 * * 1-5"    # 08:00 IST pre-market briefing (02:30 UTC)
+    - cron: "15 10 * * 1-5"   # 15:45 IST post-close confirmation (10:15 UTC)
   workflow_dispatch:         # allow manual runs from the Actions tab
 
 permissions:
@@ -53,9 +58,10 @@ jobs:
 
       # schedular.job_morning_scan(): refreshes the price CSVs, captures
       # fundamental snapshots, screens the universe, runs the AI second
-      # opinion and sends Telegram alerts. It skips weekends and NSE holidays
-      # on its own. A failure must not block committing partial results.
-      - name: Run post-close scan
+      # opinion, monitors open positions against their stop/target plan and
+      # sends Telegram alerts. It skips weekends and NSE holidays on its own.
+      # A failure must not block committing partial results.
+      - name: Run scheduled scan
         run: |
           python schedular.py morning || true
 

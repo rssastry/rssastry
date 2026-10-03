@@ -43,12 +43,20 @@ Two things about the **free** Render plan bite this app:
 
 ### Recommended fix — GitHub Actions daily scan (free)
 
-`.github/workflows/daily-scan.yml` runs the full post-close scan on GitHub's
-free runners every weekday at 15:45 IST and commits the fresh results back to
-`main`. Because Render has `autoDeploy: true`, the dashboard redeploys with
-the latest `ai_analysis.json` / `screener_results.json` / refreshed price
-CSVs automatically — so it stops "starting from fresh" and always shows the
-latest scan.
+`.github/workflows/daily-scan.yml` runs the full scan on GitHub's free
+runners **twice** every market weekday and commits the fresh results back to
+`main`:
+
+- **08:00 IST** — the pre-market briefing (02:30 UTC), running on the prior
+  day's completed bar so it is ready before the 09:15 open;
+- **15:45 IST** — the post-close confirmation (10:15 UTC) on the same-day
+  completed bar.
+
+Because Render has `autoDeploy: true`, the dashboard redeploys with the
+latest `ai_analysis.json` / `screener_results.json` / refreshed price CSVs
+automatically — so it stops "starting from fresh" and always shows the latest
+scan. (`python run.py scheduler` still exists for locally-hosted deployments;
+the workflow is the free replacement on Render.)
 
 1. Push this repo to GitHub.
 2. Add at least **`GROQ_API_KEY`** as a repository secret
@@ -256,6 +264,26 @@ reads — no schema change:
 - `marketCap`, `forwardPE`, `heldPercentInsiders` and sector remain
   current-only (not reconstructible from annual statements); those rows simply
   stay absent until daily snapshots accumulate for that window.
+
+## Managing live positions (`run.py monitor` / `reconcile`)
+
+Two day-to-day helpers keep open positions honest:
+
+- `python run.py monitor` — checks every open holding's live price against its
+  stored stop-loss and target and fires **once-per-level** Telegram alerts
+  (state persisted under `data_cache/position_alerts_fired.json`). The 12:30
+  and 15:00 scheduled jobs call the same check, and the Portfolio page shows
+  the live stop/target distance per holding.
+- `python run.py reconcile` — re-validates every holding against the current
+  field validators (`validate_holding_fields`) and, with `fix=True`, rebuilds
+  a compliant ATR-based target/stop wherever the stored plan is impossible
+  (e.g. the legacy HINDCOPPER record stored target below entry). Run it after
+  upgrading to catch legacy data; it never touches security prices or exits.
+
+Costs in the simulator are also now honest by default: the paper broker and
+the validation/backtest harnesses include STT (0.025% delivery, `config.STT_RATE`)
+plus a 5 bps slippage assumption (`SLIPPAGE_RATE`) unless explicitly disabled,
+so paper P&L is no longer overstated.
 
 For a true five-year fundamental backtest, use a provider that supplies
 point-in-time historical fundamentals and valuation ratios. Import each value

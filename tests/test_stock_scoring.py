@@ -16,6 +16,23 @@ import os
 import numpy as np
 import pandas as pd
 
+import portfolio as portfolio_module
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_portfolio_file(tmp_path, monkeypatch):
+    """Never read/write the real portfolio.json during tests.
+
+    Several tests in this file temporarily mutate the live portfolio; run them
+    against a throwaway file so the repo's portfolio.json is always safe.
+    """
+    monkeypatch.setattr(portfolio_module, "PORTFOLIO_FILE",
+                        str(tmp_path / "portfolio.json"))
+    # Seed the isolated file with the same shape the module expects.
+    portfolio_module.save_portfolio(
+        {"holdings": [], "closed_trades": [], "last_updated": ""})
+
 
 def test_weak_momentum_stock_is_penalized():
     stock = {

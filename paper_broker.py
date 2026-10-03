@@ -8,20 +8,33 @@ from trading_db import TradingDatabase, _symbol
 
 
 class PaperBroker:
-    """Long-only simulated broker with immediate market fills."""
+    """Long-only simulated broker with immediate market fills.
+
+    Optional realistic-cost mode: ``slippage`` pushes the fill away from the
+    quote (buy higher / sell lower) and ``stt_rate`` adds the India STT line
+    to every fill's fee. Both default to 0.0 so pure price-level tests stay
+    exact; the broker factory enables them via config for honest paper P&L.
+    """
 
     name = "paper"
 
     def __init__(self, initial_cash: float, db: TradingDatabase | None = None,
-                 transaction_cost: float = 0.001, fixed_fee: float = 0.0):
+                 transaction_cost: float = 0.001, fixed_fee: float = 0.0,
+                 slippage: float = 0.0, stt_rate: float = 0.0):
         if float(initial_cash) <= 0:
             raise ValueError("initial_cash must be positive")
         if float(transaction_cost) < 0 or float(fixed_fee) < 0:
             raise ValueError("fees cannot be negative")
+        if float(slippage) < 0 or float(slippage) >= 0.5:
+            raise ValueError("slippage must be in [0, 0.5)")
+        if float(stt_rate) < 0:
+            raise ValueError("stt_rate cannot be negative")
         self.db = db or TradingDatabase()
         self._owns_db = db is None
         self.transaction_cost = float(transaction_cost)
         self.fixed_fee = float(fixed_fee)
+        self.slippage = float(slippage)
+        self.stt_rate = float(stt_rate)
         latest = self.db.conn.execute(
             "SELECT available_cash FROM account_snapshots WHERE broker = ? "
             "ORDER BY as_of DESC LIMIT 1", (self.name,)
@@ -78,8 +91,10 @@ class PaperBroker:
         side = intent["side"]
         quantity = int(intent["quantity"])
         position = self._position(symbol, intent["product"])
-        fee = price * quantity * self.transaction_cost + self.fixed_fee
-        gross = price * quantity
+        # Realistic fill: buys slip UP, sells slip DOWN from the quoted price.
+        fill_price = price * (1 + self.slippage) if side == "BUY" else price * (1 - self.slippage)
+        fee = fill_price * quantity * (self.transaction_cost + self.stt_rate) + self.fixed_fee
+        gross = fill_price * quantity
         if side == "BUY" and gross + fee > self.cash + 1e-9:
             return self._reject(intent, "insufficient paper cash")
         if side == "SELL" and quantity > int(position["quantity"] if position else 0):
@@ -88,12 +103,14 @@ class PaperBroker:
         broker_order_id = f"paper-{intent['client_order_id']}"
         stored_order = self.db.record_order(intent["id"], "OPEN", broker_order_id=broker_order_id)
         self.db.record_fill(
-            stored_order["id"], quantity, price, fees=fee,
+            stored_order["id"], quantity, fill_price, fees=fee,
             broker_trade_id=f"trade-{intent['client_order_id']}",
-            raw={"broker": self.name, "fill_type": "immediate"},
+            raw={"broker": self.name, "fill_type": "immediate",
+                 "quoted_price": round(price, 4),
+                 "slippage": self.slippage, "stt_rate": self.stt_rate},
         )
         self.cash += (-gross - fee) if side == "BUY" else (gross - fee)
-        self._update_position(intent, quantity, price)
+        self._update_position(intent, quantity, fill_price)
         self.get_account()
         return dict(self.db.conn.execute(
             "SELECT * FROM orders WHERE id = ?", (stored_order["id"],)

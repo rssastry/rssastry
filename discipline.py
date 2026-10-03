@@ -172,6 +172,7 @@ def realized_ledger(portfolio: dict = None, nifty_sym: str = NIFTY_SYMBOL,
             "buy_date": buy_date,
             "sell_date": sell_date,
             "realized_pnl_pct": round(pnl_pct, 2),
+            "exit": str(trade.get("exit_reason") or "MANUAL").upper(),
             "nifty_buyhold_pct": (round(nifty_ret * 100, 2)
                                   if nifty_ret is not None else None),
             "alpha_pct": (round(pnl_pct - nifty_ret * 100, 2)
@@ -243,6 +244,8 @@ def build_discipline_report(out: str = None, portfolio: dict = None) -> dict:
             "closed_alpha_win_pct": round(100.0 * positives_ratio(closed), 1),
             "net_realized_pnl_pct": round(
                 sum(r["realized_pnl_pct"] for r in closed), 2),
+            "closed_exit_reasons": dict(
+                __import__("collections").Counter(r["exit"] for r in closed)),
         },
     }
     with open(out, "w", encoding="utf-8") as handle:
