@@ -261,6 +261,36 @@ NSE_HOLIDAYS_2026 = {
     "2026-12-25",  # Christmas
 }
 
+
+def _holidays_from_file() -> set:
+    """Extra NSE holidays from data/nse_holidays.csv (YYYY-MM-DD[,note] rows).
+
+    Lets annual holiday updates become a DATA edit (no code deploy); the
+    embedded set remains the fallback for checkout environments without data/.
+    """
+    try:
+        _p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "data", "nse_holidays.csv")
+        with open(_p, encoding="utf-8") as _fh:
+            rows = [_l.split(",")[0].strip() for _l in _fh
+                    if _l.strip() and not _l.lstrip().startswith("#")]
+        return {r for r in rows if len(r) == 10 and r[4] == "-" and r[7] == "-"}
+    except Exception:
+        return set()
+
+
+_FILE_HOLIDAYS = _holidays_from_file()
+NSE_HOLIDAYS_2027 = {d for d in _FILE_HOLIDAYS if d.startswith("2027-")}
+
+
+def NSE_HOLIDAYS(year: str) -> frozenset:
+    """Holiday dates (YYYY-MM-DD) for ``year``: the embedded calendar PLUS any
+    CSV-only additions (swapped / late-notified closures). Use the year string,
+    e.g. ``NSE_HOLIDAYS(datetime.today().strftime('%Y'))``."""
+    base = set({"2026": NSE_HOLIDAYS_2026, "2027": NSE_HOLIDAYS_2027}.get(year, set()))
+    base.update(d for d in _FILE_HOLIDAYS if d.startswith(year + "-"))
+    return frozenset(base)
+
 # ── Execution / broker ─────────────────────────────────────────
 # Execution backend used by brokers.factory.get_broker(). "paper" is the
 # default deterministic simulator; "zerodha" activates the Kite Connect

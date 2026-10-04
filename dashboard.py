@@ -1082,7 +1082,7 @@ if "Dashboard" in page:
             <div class="hero-cell">
               <div class="hero-label">Avg Confidence</div>
               <div class="hero-value" style="color:#60a5fa">{avg_conf}%</div>
-              <div class="hero-sub">AI ensemble score</div>
+              <div class="hero-sub">mean LLM confidence</div>
             </div>
             <div class="hero-cell">
               <div class="hero-label">Active Holdings</div>
@@ -1196,6 +1196,14 @@ elif "Picks" in page:
 
     for tab, style in zip([tab1, tab2, tab3], ["intraday","swing","positional"]):
         with tab:
+            if style == "intraday":
+                try:
+                    from config import ALLOW_DAILY_BAR_INTRADAY_BUY
+                    if not ALLOW_DAILY_BAR_INTRADAY_BUY:
+                        st.caption("Policy note: intraday BUY is disabled on daily bars — "
+                                   "this tab is WATCHLIST context only (no LLM spend).")
+                except Exception:
+                    pass
             picks = [p for p in analysis.get(style,[]) if p.get("recommendation")=="BUY"]
             if not picks:
                 st.info(f"No qualified BUY candidates for {style} today.")
@@ -1830,6 +1838,66 @@ elif "Portfolio" in page:
                          for r in _ledger])
                     st.dataframe(led_df, width="stretch", hide_index=True)
                 st.caption("Refresh: `python run.py discipline` (or the 15:00 scheduled job).")
+
+# Performance: XIRR + backtest equity curve & risk metrics
+            st.markdown('<div class="section-header">Performance</div>', unsafe_allow_html=True)
+            try:
+                from discipline import portfolio_xirr
+                _xirr = portfolio_xirr()
+                if _xirr is not None:
+                    st.metric("XIRR (annualized)",
+                              f"{_xirr * 100:+.1f}%",
+                              help="Money-weighted annualised account return. "
+                                   "Extreme on short windows — trend, not precision.")
+            except Exception as _e:
+                st.caption(f"XIRR unavailable: {_e}")
+
+            def _frac(v):
+                """Backtest report stores rates as fractions; normalise defensively."""
+                try:
+                    v = float(v or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+                return v if abs(v) <= 5 else v / 100.0
+
+            try:
+                with open(paths.path("portfolio_backtest_report.json"), encoding="utf-8") as fh:
+                    _bt = json.load(fh)
+            except Exception:
+                _bt = None
+            if _bt:
+                b1, b2, b3, b4 = st.columns(4)
+                b1.metric("Backtest total return", f"{_frac(_bt.get('total_return')) * 100:+.1f}%")
+                b2.metric("Strategy CAGR", f"{_frac(_bt.get('cagr')) * 100:+.1f}%")
+                b3.metric("Max drawdown", f"{_frac(_bt.get('max_drawdown')) * 100:.1f}%",
+                          help="Deepest peak-to-trough decline in the backtest")
+                b4.metric("Sharpe", f"{_frac(_bt.get('sharpe')):.2f}",
+                          help="Backtest risk-adjusted return (1y ≥ 1.0 is decent)")
+                _eq = _bt.get("equity_curve") or []
+                if _eq:
+                    eq_fig = go.Figure()
+                    eq_fig.add_trace(go.Scatter(
+                        x=[e.get("date") for e in _eq],
+                        y=[e.get("portfolio_value") for e in _eq],
+                        mode="lines", name="Equity",
+                        line=dict(color="#2dd4bf", width=2)))
+                    eq_fig.update_layout(
+                        template="plotly_dark", paper_bgcolor="#0d131c",
+                        plot_bgcolor="#0d131c", height=260,
+                        margin=dict(l=10, r=10, t=30, b=10),
+                        font=dict(family="Inter", color="#9fb3c8"),
+                        yaxis=dict(gridcolor="#1c2733"),
+                        xaxis=dict(gridcolor="#1c2733"),
+                        title=dict(text="Backtest equity curve (EMA trend strategy)",
+                                   font=dict(color="#73879c", size=12)))
+                    st.plotly_chart(eq_fig, width="stretch", key="portfolio_eq_curve")
+                st.caption("Refresh: `python run.py bible` re-runs the backtest report.")
+            elif os.path.exists(paths.path("equity_curve.png")):
+                st.image(paths.path("equity_curve.png"),
+                         caption="Equity curve (from visualize.py)", width="stretch")
+            if os.path.exists(paths.path("trade_return_hist.png")):
+                st.image(paths.path("trade_return_hist.png"),
+                         caption="Per-trade return distribution", width="stretch")
 
             # Open-position monitor: live price vs stored stop/target plan
             st.markdown('<div class="section-header">Position Monitor</div>', unsafe_allow_html=True)

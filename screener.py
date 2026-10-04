@@ -92,6 +92,32 @@ NSE_STOCKS = [
 # Deduplicate while preserving order
 NSE_STOCKS = list(dict.fromkeys(NSE_STOCKS))
 
+
+def _load_universe_file():
+    """Optional curated universe from data/nse_universe.csv (one bare symbol per
+    line; '#' comments and blanks ignored). Returns None when absent, so the
+    embedded list stays the fallback. Editing the CSV is how an index
+    reconstitution becomes a data change instead of a code change."""
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "data", "nse_universe.csv")
+        if not os.path.exists(p):
+            return None
+        with open(p, encoding="utf-8") as fh:
+            syms = [ln.strip().upper() for ln in fh
+                    if ln.strip() and not ln.lstrip().startswith("#")]
+        if not syms:
+            return None
+        return list(dict.fromkeys(s if s.endswith(".NS") else s + ".NS"
+                                  for s in syms))
+    except Exception:
+        return None
+
+
+_UNIVERSE_FILE = _load_universe_file()
+if _UNIVERSE_FILE is not None:
+    NSE_STOCKS = _UNIVERSE_FILE
+
 # config
 from config import (CROSSOVER_RECENCY_BARS, MAX_VOLUME_RATIO, MIN_DAILY_HISTORY,
                     BREAKDOWN_LOOKBACK_BARS, CRASH_DAY_PCT, CRASH_DAY_VOL_MULT,

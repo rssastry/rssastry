@@ -56,3 +56,25 @@ def test_recommended_levels_fallback_without_atr(monkeypatch):
     assert plan["target"] == 110.0          # +10% deterministic fallback
     assert plan["stop_loss"] == pytest.approx(95.0, abs=0.01)
     assert plan["atr"] is None
+
+
+def test_xirr_known_rate():
+    from discipline import _xirr
+    rate = _xirr([("2026-01-01", -1000), ("2027-01-01", 1100)])
+    assert rate is not None
+    assert abs(rate - 0.10) < 0.01
+
+
+def test_xirr_needs_an_outflow():
+    from discipline import _xirr
+    assert _xirr([("2026-01-01", 100), ("2027-01-01", 110)]) is None
+    assert _xirr([]) is None
+
+
+def test_universe_and_holidays_are_data_driven():
+    from screener import NSE_STOCKS
+    from config import NSE_HOLIDAYS, _FILE_HOLIDAYS
+    assert len(NSE_STOCKS) >= 190          # CSV-fed universe loads
+    assert all(s.endswith(".NS") for s in NSE_STOCKS)
+    assert "2026-11-09" in NSE_HOLIDAYS("2026")   # Diwali (embedded + CSV)
+    assert "2026-12-25" in _FILE_HOLIDAYS

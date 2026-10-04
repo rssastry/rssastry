@@ -215,6 +215,91 @@ def unrealized_now(portfolio: dict = None, nifty_sym: str = NIFTY_SYMBOL,
         })
     return rows
 
+def _xirr(flows: list) -> float | None:
+    """Annualised IRR for [(date, amount), ...] cash flows via bisection.
+
+    Returns None when no sign change exists (no outflows, or all one-sided).
+    """
+    import numpy as _np
+
+    values = []
+    for d, a in flows:
+        try:
+            amounts_n = float(a)
+        except (TypeError, ValueError):
+            continue
+        values.append((str(d), amounts_n))
+    if not values:
+        return None
+    values.sort(key=lambda v: v[0])
+    amounts = _np.array([a for _, a in values], dtype=float)
+    if not bool((amounts < -1e-12).any()):
+        return None
+    start = _np.datetime64(values[0][0])
+    days = _np.array([( _np.datetime64(d) - start).astype("timedelta64[D]").astype(float)
+                      for d, _ in values], dtype=float)
+    scale = 365.25
+
+    def npv(rate: float) -> float:
+        return float((amounts / ((1.0 + rate) ** (days / scale))).sum())
+
+    lo, hi = -0.90, 5.0
+    if npv(lo) * npv(hi) >= 0:
+        return None  # no root inside the search band
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        if npv(mid) > 0:
+            lo = mid
+        else:
+            hi = mid
+    return round((lo + hi) / 2.0, 6)
+
+
+def portfolio_xirr(portfolio: dict = None, as_of: str = None) -> float | None:
+    """XIRR of the account: buys as outflows, sells + current value as inflows.
+
+    Open holdings are marked to the last local close; closed trades use their
+    recorded sell date / proceeds. Runs fully offline from portfolio.json +
+    raw_data/prices CSVs. Returns the annualised rate (e.g. 0.12 = 12%).
+    """
+    from price_store import load_adjusted
+    portfolio = portfolio if portfolio is not None else load_portfolio()
+    as_of = as_of or date.today().isoformat()
+    flows: list = []
+    for h in portfolio.get("holdings", []):
+        bd = str(h.get("buy_date") or "")[:10]
+        try:
+            bp = float(h.get("buy_price", 0) or 0)
+            qty = int(h.get("quantity", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not bd or bp <= 0 or qty <= 0:
+            continue
+        flows.append((bd, -bp * qty))
+        symbol = str(h.get("symbol", "")).upper().replace(".NS", "")
+        current = None
+        df = load_adjusted(symbol, period=None, interval="1d")
+        if df is not None and not df.empty:
+            current = float(df["Close"].iloc[-1])
+        flows.append((as_of, (current or bp) * qty))
+    for t in portfolio.get("closed_trades", []):
+        bd = str(t.get("buy_date") or "")[:10]
+        sd = str(t.get("sell_date") or "")[:10]
+        try:
+            bp = float(t.get("buy_price", 0) or 0)
+            qty = float(t.get("closed_qty") or t.get("quantity") or 0)
+            sp = float(t.get("sell_price", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not bd or bp <= 0 or qty <= 0:
+            continue
+        flows.append((bd, -bp * qty))
+        if sd and sp > 0:
+            flows.append((sd, sp * qty))
+    if len(flows) < 2:
+        return None
+    return _xirr(flows)
+
 
 def positives_ratio(rows: list) -> float:
     if not rows:
@@ -246,6 +331,7 @@ def build_discipline_report(out: str = None, portfolio: dict = None) -> dict:
                 sum(r["realized_pnl_pct"] for r in closed), 2),
             "closed_exit_reasons": dict(
                 __import__("collections").Counter(r["exit"] for r in closed)),
+            "xirr_pct": round(100.0 * (portfolio_xirr(portfolio=portfolio) or 0.0), 2),
         },
     }
     with open(out, "w", encoding="utf-8") as handle:

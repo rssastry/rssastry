@@ -22,13 +22,13 @@ console.force_utf8_stdio()
 
 def is_market_day() -> bool:
     """Skip weekends AND NSE holidays."""
-    from config import NSE_HOLIDAYS_2026
+    from config import NSE_HOLIDAYS
     today = datetime.today()
     if today.weekday() >= 5:
         return False
-    # Check NSE holiday list
+    # Check NSE holiday list (embedded + data/nse_holidays.csv additions)
     date_str = today.strftime("%Y-%m-%d")
-    if date_str in NSE_HOLIDAYS_2026:
+    if date_str in NSE_HOLIDAYS(today.strftime("%Y")):
         return False
     return True
 
