@@ -1212,13 +1212,26 @@ elif "Picks" in page:
                     with st.expander("View watchlist and failed qualification checks"):
                         rows = []
                         for item in watchlist:
+                            ep = item.get("entry_price", {})
+                            tp = item.get("target_prices", {})
+                            fails = item.get("eligibility_failures", [])
+                            why = "; ".join(fails[:3]) if fails else "See analysis"
+                            if len(fails) > 3:
+                                why += f" (+{len(fails) - 3} more)"
                             rows.append({
                                 "Symbol": item.get("symbol", ""),
                                 "Regime tier": item.get("regime_tier", ""),
                                 "Score": item.get("ensemble_score", ""),
                                 "Decision": item.get("selection_decision", item.get("recommendation", "")),
                                 "AI view": item.get("ai_recommendation", "Not available"),
-                                "Why not qualified": "; ".join(item.get("eligibility_failures", [])) or "See analysis",
+                                "Ideal Entry": f"₹{ep.get('ideal','?')}",
+                                "Entry Zone":  f"₹{ep.get('range_low','?')} – ₹{ep.get('range_high','?')}",
+                                "T1": f"₹{tp.get('T1','?')}",
+                                "T2": f"₹{tp.get('T2','?')}",
+                                "T3": f"₹{tp.get('T3','?')}",
+                                "Stop": f"₹{item.get('stop_loss','?')}",
+                                "R:R": item.get("risk_reward_ratio") or item.get("risk_reward_t1") or "—",
+                                "Why not qualified": why,
                             })
                         st.dataframe(pd.DataFrame(rows), hide_index=True)
                 continue
@@ -2189,6 +2202,41 @@ elif "Screener Results" in page:
         results = rep.get('results', {})
         st.markdown(f'<div class="page-sub">Scan time: {scan_time}</div>', unsafe_allow_html=True)
 
+        # screener_results.json does NOT store the deterministic execution
+        # levels; ai_analysis.json does. Merge them in so every row (including
+        # WATCHLIST) can show ideal entry / target / stop reference values
+        # alongside the failure reasons.
+        _ai_analysis = load_json("ai_analysis.json").get("analysis", {})
+        _levels_by_key: dict = {}
+        for _style, _lst in _ai_analysis.items():
+            for _rec in (_lst if isinstance(_lst, list) else []):
+                if isinstance(_rec, dict) and _rec.get("symbol"):
+                    _levels_by_key[(_rec["symbol"], _style)] = _rec
+                    _levels_by_key[(_rec["symbol"], _rec.get("trading_style"))] = _rec
+
+        def _ref_levels(item, style):
+            """Ideal entry / targets / stop / R:R for a screener row.
+
+            Prefer the ai_analysis.json record (the deterministic ATR levels from
+            the AI pass); if that pass skipped the symbol (e.g. intraday
+            WATCHLIST, which costs no LLM spend), recompute the same canonical
+            ATR-based levels from the screener row so every row still shows
+            reference entry/exit values.
+            """
+            rec = _levels_by_key.get((item.get("symbol"), style), {}) or {}
+            ep, tp, sl, rr = (rec.get("entry_price"), rec.get("target_prices"),
+                              rec.get("stop_loss"), rec.get("risk_reward_ratio"))
+            if ep and tp and sl:
+                return ep, tp, sl, rr or ""
+            try:
+                from ai_analyst import AIAnalyst
+                # Instance method that only uses `ind` + `style` (no self state):
+                # reuse the canonical deterministic ATR formula directly.
+                d = AIAnalyst._compute_deterministic_levels(None, item, style)
+                return d["entry_price"], d["target_prices"], d["stop_loss"], d.get("risk_reward_ratio", "")
+            except Exception:
+                return {}, {}, None, ""
+
         styles = list(results.keys())
         if not styles:
             st.info('No results in screener_results.json')
@@ -2247,14 +2295,20 @@ elif "Screener Results" in page:
                     # table view
                     rows = []
                     for s in display_stocks:
+                        _ep, _tp, _sl, _rr = _ref_levels(s, style)
                         rows.append({
-                            'Symbol': s.get('symbol',''),
-                            'Decision': s.get('recommendation',''),
+                            'Symbol':    s.get('symbol',''),
+                            'Decision':  s.get('recommendation',''),
                             'Regime tier': s.get('regime_tier',''),
-                            'Price': s.get('current_price',''),
-                            'RSI': s.get('rsi',''),
+                            'Price':     s.get('current_price',''),
+                            'Ideal Entry': f"₹{_ep.get('ideal','?')}",
+                            'T1':        f"₹{_tp.get('T1','?')}",
+                            'T2':        f"₹{_tp.get('T2','?')}",
+                            'Stop':      f"₹{_sl or '?'}",
+                            'R:R':       _rr or '—',
+                            'RSI':       s.get('rsi',''),
                             'Vol Ratio': s.get('volume_ratio',''),
-                            'Score': s.get('ensemble_score', s.get('score','')),
+                            'Score':     s.get('ensemble_score', s.get('score','')),
                             'Pilot checks': s.get('pilot_notes') or '',
                             'Why not qualified': "; ".join(s.get('eligibility_failures', [])) or "",
                         })
@@ -2274,6 +2328,16 @@ elif "Screener Results" in page:
                                 if _fails:
                                     st.warning("⚠️ Rejected: " + "; ".join(_fails))
                                 st.markdown(f"**Signals:** {', '.join(s.get('signals',[]))}")
+                                # Reference levels from the AI analysis pass
+                                # (ideal entry / targets / stop) for review rows
+                                _lep, _ltp, _lsl, _lrr = _ref_levels(s, style)
+                                if _lep.get('ideal') or _lsl:
+                                    st.caption(
+                                        f"Reference levels: Ideal ₹{_lep.get('ideal','?')} · "
+                                        f"T1 ₹{_ltp.get('T1','?')} · T2 ₹{_ltp.get('T2','?')} · "
+                                        f"T3 ₹{_ltp.get('T3','?')} · Stop ₹{_lsl or '?'}"
+                                        + (f" · R:R {_lrr}" if _lrr else "")
+                                    )
                                 # multi-timeframe confirmation badge
                                 mt = s.get('multi_tf_confirm', False)
                                 mt_text = 'Yes' if mt else 'No'
